@@ -1,0 +1,302 @@
+{{define "dev_stream.html"}}
+{{template "header" .}}
+  <div class="banner probe-banner">
+    Phase 3 verification probe — not the product client.
+  </div>
+  <h1>Stream probe</h1>
+  <p class="muted">Authenticate, start a listening session, play progressive (or HLS where supported), steer with like / skip / dislike, and short-poll now playing + queue.</p>
+
+  <div class="probe-grid">
+    <section>
+      <h2 class="probe-h2">Auth</h2>
+      <label class="probe-label">Username
+        <input id="user" autocomplete="username" class="probe-input"/>
+      </label>
+      <label class="probe-label">Password
+        <input id="pass" type="password" autocomplete="current-password" class="probe-input"/>
+      </label>
+      <div class="btn-row" style="margin-top:0.75rem">
+        <button type="button" id="login">Login / register</button>
+        <button type="button" id="logout" class="secondary">Logout</button>
+        <button type="button" id="me" class="secondary">Who am I</button>
+      </div>
+      <p class="muted" id="auth-line" style="margin-top:0.5rem">Not signed in.</p>
+    </section>
+
+    <section>
+      <h2 class="probe-h2">Session</h2>
+      <label class="probe-label">Seed track id
+        <input id="seed" type="number" value="1" min="1" class="probe-input"/>
+      </label>
+      <label class="probe-label">Playback mode
+        <select id="mode" class="probe-input">
+          <option value="progressive" selected>Progressive (reliable)</option>
+          <option value="hls">HLS (Safari / capable browsers)</option>
+        </select>
+      </label>
+      <div class="btn-row" style="margin-top:0.75rem">
+        <button type="button" id="start">Start session</button>
+        <button type="button" id="stop" class="secondary">Stop session</button>
+        <button type="button" id="refresh" class="secondary">Refresh</button>
+      </div>
+    </section>
+  </div>
+
+  <section style="margin-top:1.25rem">
+    <h2 class="probe-h2">Playback &amp; feedback</h2>
+    <audio id="player" controls style="width:100%;margin:0.5rem 0 0.75rem"></audio>
+    <div class="btn-row">
+      <button type="button" id="like">Like</button>
+      <button type="button" id="skip" class="secondary">Skip</button>
+      <button type="button" id="dislike" class="secondary">Dislike</button>
+    </div>
+  </section>
+
+  <section style="margin-top:1.25rem">
+    <h2 class="probe-h2">Now playing / queue <span class="muted">(2s poll)</span></h2>
+    <dl class="meta" id="session-meta">
+      <dt>Session</dt><dd id="meta-session">—</dd>
+      <dt>Status</dt><dd id="meta-status">—</dd>
+      <dt>Now playing</dt><dd id="meta-now">—</dd>
+      <dt>Queue</dt><dd id="meta-queue">—</dd>
+      <dt>Last feedback</dt><dd id="meta-fb">—</dd>
+    </dl>
+  </section>
+
+  <pre id="status" class="probe-status"></pre>
+
+  <script>
+  (function () {
+    var token = '';
+    var sessionId = '';
+    var playingTrackId = 0;
+    var pollTimer = null;
+    var statusEl = document.getElementById('status');
+    var authLine = document.getElementById('auth-line');
+    var player = document.getElementById('player');
+
+    function setStatus(o) {
+      statusEl.textContent = typeof o === 'string' ? o : JSON.stringify(o, null, 2);
+    }
+
+    function mode() {
+      return document.getElementById('mode').value;
+    }
+
+    async function api(path, opts) {
+      opts = opts || {};
+      var headers = Object.assign({'Content-Type': 'application/json'}, opts.headers || {});
+      if (token) headers['Authorization'] = 'Bearer ' + token;
+      var res = await fetch(path, Object.assign({}, opts, {headers: headers, credentials: 'same-origin'}));
+      var text = await res.text();
+      var body;
+      try { body = JSON.parse(text); } catch (e) { body = text; }
+      if (!res.ok) {
+        var err = new Error((body && body.error) || res.statusText || 'request failed');
+        err.status = res.status;
+        err.body = body;
+        throw err;
+      }
+      return body;
+    }
+
+    function renderMeta(body) {
+      if (!body) return;
+      document.getElementById('meta-session').textContent = body.id || '—';
+      document.getElementById('meta-status').textContent = body.status || '—';
+      var np = body.now_playing;
+      document.getElementById('meta-now').textContent = np
+        ? ('track_id=' + np.track_id + (body.progressive_url ? (' · ' + body.progressive_url) : ''))
+        : '—';
+      var q = body.queue || [];
+      document.getElementById('meta-queue').textContent = q.length
+        ? q.map(function (t) { return t.track_id; }).join(', ')
+        : '(empty)';
+      var fb = body.last_feedback;
+      document.getElementById('meta-fb').textContent = fb
+        ? (fb.signal + ' on track ' + fb.track_id + (fb.at ? (' @ ' + fb.at) : ''))
+        : '—';
+    }
+
+    function loadAudio(body) {
+      if (!body) return;
+      var url = '';
+      if (mode() === 'hls' && body.hls_url) {
+        url = body.hls_url;
+      } else if (body.progressive_url) {
+        url = body.progressive_url;
+      } else if (body.now_playing && body.now_playing.track_id) {
+        url = '/api/v1/tracks/' + body.now_playing.track_id + '/stream';
+      }
+      if (!url) return;
+      var tid = body.now_playing ? body.now_playing.track_id : 0;
+      if (tid && tid === playingTrackId && player.src && player.src.indexOf(url) !== -1) {
+        return;
+      }
+      playingTrackId = tid;
+      // Same-origin cookie (lt_session) authenticates media GETs; Bearer also sent by fetch paths.
+      player.src = url;
+      player.play().catch(function () {});
+    }
+
+    function applyStatus(body, forceReload) {
+      if (!body || !body.id) return;
+      sessionId = body.id;
+      renderMeta(body);
+      var tid = body.now_playing ? body.now_playing.track_id : 0;
+      if (forceReload || (tid && tid !== playingTrackId)) {
+        loadAudio(body);
+      }
+      setStatus(body);
+    }
+
+    function stopPoll() {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    }
+
+    function startPoll() {
+      stopPoll();
+      pollTimer = setInterval(function () {
+        if (!sessionId) return;
+        api('/api/v1/sessions/' + sessionId)
+          .then(function (body) { applyStatus(body, false); })
+          .catch(function (e) { setStatus(e.body || String(e)); });
+      }, 2000);
+    }
+
+    document.getElementById('login').onclick = async function () {
+      try {
+        var user = document.getElementById('user').value;
+        var password = document.getElementById('pass').value;
+        var body;
+        try {
+          body = await api('/api/v1/auth/login', {
+            method: 'POST',
+            body: JSON.stringify({username: user, password: password})
+          });
+        } catch (e) {
+          if (e.status === 401 || e.status === 404) {
+            body = await api('/api/v1/auth/register', {
+              method: 'POST',
+              body: JSON.stringify({username: user, password: password})
+            });
+          } else {
+            throw e;
+          }
+        }
+        token = body.token || '';
+        authLine.textContent = 'Signed in as ' + (body.user && body.user.username
+          ? body.user.username
+          : 'user') + ' (cookie + Bearer).';
+        setStatus({login: body.user, token_prefix: token ? (token.slice(0, 8) + '…') : ''});
+      } catch (e) {
+        setStatus(e.body || String(e));
+      }
+    };
+
+    document.getElementById('logout').onclick = async function () {
+      try {
+        await api('/api/v1/auth/logout', {method: 'POST', body: '{}'});
+        token = '';
+        sessionId = '';
+        playingTrackId = 0;
+        stopPoll();
+        player.removeAttribute('src');
+        authLine.textContent = 'Not signed in.';
+        renderMeta({});
+        setStatus({ok: true, logged_out: true});
+      } catch (e) {
+        setStatus(e.body || String(e));
+      }
+    };
+
+    document.getElementById('me').onclick = async function () {
+      try {
+        var body = await api('/api/v1/auth/me');
+        authLine.textContent = 'Signed in as ' + body.username + ' (id=' + body.id + ').';
+        setStatus(body);
+      } catch (e) {
+        authLine.textContent = 'Not signed in.';
+        setStatus(e.body || String(e));
+      }
+    };
+
+    document.getElementById('start').onclick = async function () {
+      try {
+        var seed = Number(document.getElementById('seed').value);
+        var body = await api('/api/v1/sessions', {
+          method: 'POST',
+          body: JSON.stringify({seed_track_id: seed})
+        });
+        playingTrackId = 0;
+        applyStatus(body, true);
+        startPoll();
+      } catch (e) {
+        setStatus(e.body || String(e));
+      }
+    };
+
+    document.getElementById('stop').onclick = async function () {
+      try {
+        if (!sessionId) throw new Error('no session');
+        var body = await api('/api/v1/sessions/' + sessionId, {method: 'DELETE'});
+        stopPoll();
+        playingTrackId = 0;
+        player.removeAttribute('src');
+        applyStatus(body, false);
+        sessionId = '';
+      } catch (e) {
+        setStatus(e.body || String(e));
+      }
+    };
+
+    document.getElementById('refresh').onclick = async function () {
+      try {
+        if (!sessionId) throw new Error('no session');
+        var body = await api('/api/v1/sessions/' + sessionId);
+        applyStatus(body, true);
+      } catch (e) {
+        setStatus(e.body || String(e));
+      }
+    };
+
+    document.getElementById('mode').onchange = function () {
+      if (!sessionId) return;
+      api('/api/v1/sessions/' + sessionId)
+        .then(function (body) { applyStatus(body, true); })
+        .catch(function (e) { setStatus(e.body || String(e)); });
+    };
+
+    async function feedback(signal) {
+      try {
+        if (!sessionId) throw new Error('no session');
+        var body = await api('/api/v1/sessions/' + sessionId + '/feedback', {
+          method: 'POST',
+          body: JSON.stringify({signal: signal, track_id: playingTrackId || 0})
+        });
+        applyStatus(body, signal === 'skip');
+      } catch (e) {
+        setStatus(e.body || String(e));
+      }
+    }
+
+    document.getElementById('like').onclick = function () { feedback('like'); };
+    document.getElementById('skip').onclick = function () { feedback('skip'); };
+    document.getElementById('dislike').onclick = function () { feedback('dislike'); };
+
+    player.addEventListener('ended', function () {
+      // Probe continuity: natural end advances via skip (no separate advance API in v0.3).
+      if (sessionId) feedback('skip');
+    });
+
+    // Restore session cookie presence for status line.
+    api('/api/v1/auth/me').then(function (body) {
+      authLine.textContent = 'Signed in as ' + body.username + ' (id=' + body.id + ').';
+    }).catch(function () {});
+  })();
+  </script>
+{{template "footer" .}}
+{{end}}

@@ -1,0 +1,71 @@
+services:
+  browse:
+    build: .
+    image: latenttone:dev
+    ports:
+      - "${BROWSE_PORT:-8080}:8080"
+    environment:
+      TZ: UTC
+    volumes:
+      # Test/dev library — READ ONLY (required)
+      - ${MUSIC_LIBRARY:-/mnt2/media/music}:/music:ro
+      - ${DATA_DIR:-./data}:/data
+      - ./configs/scanner.yaml:/config/scanner.yaml:ro
+      - ./configs/metadata.yaml:/config/metadata.yaml:ro
+    command:
+      - "serve"
+      - "--config=/config/scanner.yaml"
+      - "--meta=/config/metadata.yaml"
+    restart: unless-stopped
+
+  browse-stream:
+    profiles: ["stream-smoke"]
+    build: .
+    image: latenttone:dev
+    ports:
+      - "${BROWSE_PORT:-8080}:8080"
+    environment:
+      TZ: UTC
+    volumes:
+      - ${MUSIC_LIBRARY:-/mnt2/media/music}:/music:ro
+      - ${DATA_DIR:-./data}:/data
+      # stream-smoke overlay: enable_stream_probe + enable_api_docs
+      - ./configs/scanner-stream-smoke.yaml:/config/scanner.yaml:ro
+      - ./configs/metadata.yaml:/config/metadata.yaml:ro
+    command:
+      - "serve"
+      - "--config=/config/scanner.yaml"
+      - "--meta=/config/metadata.yaml"
+    restart: "no"
+
+  scan:
+    profiles: ["scan"]
+    build: .
+    image: latenttone:dev
+    volumes:
+      - ${MUSIC_LIBRARY:-/mnt2/media/music}:/music:ro
+      - ${DATA_DIR:-./data}:/data
+      - ./configs/scanner.yaml:/config/scanner.yaml:ro
+    command: ["scan", "--config", "/config/scanner.yaml"]
+
+  embed:
+    profiles: ["embed"]
+    build: .
+    image: latenttone:dev
+    volumes:
+      - ${MUSIC_LIBRARY:-/mnt2/media/music}:/music:ro
+      - ${DATA_DIR:-./data}:/data
+      - ./configs/metadata.yaml:/config/metadata.yaml:ro
+      - ./configs/scanner.yaml:/config/scanner.yaml:ro
+    command: ["embed", "--meta", "/config/metadata.yaml"]
+
+  embed-ml:
+    profiles: ["embed-ml"]
+    build: .
+    image: latenttone:dev
+    volumes:
+      - ${MUSIC_LIBRARY:-/mnt2/media/music}:/music:ro
+      - ${DATA_DIR:-./data}:/data
+      - ./configs/metadata-ml.yaml:/config/metadata.yaml:ro
+      - ./configs/essentia_profile.yaml:/config/essentia_profile.yaml:ro
+    command: ["embed", "--meta", "/config/metadata.yaml"]

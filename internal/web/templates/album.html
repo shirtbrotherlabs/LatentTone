@@ -1,0 +1,35 @@
+{{define "album.html"}}
+{{template "header" .}}
+  <p class="muted">
+    {{if .Album.ArtistID.Valid}}<a href="/artists/{{.Album.ArtistID.Int64}}">← {{.Album.Artist}}</a>{{else}}<a href="/artists">← Artists</a>{{end}}
+  </p>
+  <div class="row">
+    <div>
+      {{if .Album.CoverPath.Valid}}
+        <img class="cover" src="/covers/{{.Album.CoverPath.String}}" alt="Album cover">
+      {{else}}
+        <div class="cover" title="No cover"></div>
+      {{end}}
+    </div>
+    <div>
+      <h1>{{.Album.Title}}</h1>
+      <p>{{.Album.Artist}}{{if .Album.Year.Valid}} · {{.Album.Year.Int64}}{{end}}</p>
+    </div>
+  </div>
+  <table style="margin-top:1.25rem">
+    <thead><tr><th>#</th><th>Title</th><th>Duration</th><th>Format</th></tr></thead>
+    <tbody>
+    {{range .Tracks}}
+      <tr>
+        <td>{{if .TrackNumber.Valid}}{{.TrackNumber.Int64}}{{end}}</td>
+        <td><a href="/tracks/{{.ID}}">{{.Title}}</a></td>
+        <td>{{duration .DurationMS}}</td>
+        <td>{{if .Format.Valid}}{{.Format.String}}{{end}}</td>
+      </tr>
+    {{else}}
+      <tr><td colspan="4" class="muted">No tracks</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+{{template "footer" .}}
+{{end}}

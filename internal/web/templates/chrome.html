@@ -1,0 +1,84 @@
+{{define "header"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} · LatentTone Catalog</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #111; --fg: #eee; --muted: #999; --accent: #c4a35a; --line: #333; }
+    @media (prefers-color-scheme: light) {
+      :root { --bg: #f6f4ef; --fg: #1a1a1a; --muted: #666; --accent: #8a6a2f; --line: #ddd; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "IBM Plex Sans", "Segoe UI", sans-serif; background: var(--bg); color: var(--fg); line-height: 1.45; }
+    header { padding: 1rem 1.25rem; border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 1rem; align-items: baseline; }
+    header a { color: var(--accent); text-decoration: none; margin-right: 0.75rem; }
+    header strong { letter-spacing: 0.04em; }
+    main { padding: 1.25rem; max-width: 1100px; margin: 0 auto; }
+    h1 { font-size: 1.4rem; margin: 0 0 1rem; font-weight: 600; }
+    .muted { color: var(--muted); }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 0.45rem 0.35rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 500; font-size: 0.85rem; }
+    a { color: var(--accent); }
+    .cover { width: 160px; height: 160px; object-fit: cover; background: var(--line); display: block; }
+    .cover-sm { width: 48px; height: 48px; object-fit: cover; background: var(--line); }
+    .row { display: flex; gap: 1.25rem; flex-wrap: wrap; }
+    .meta dt { color: var(--muted); font-size: 0.85rem; }
+    .meta dd { margin: 0 0 0.65rem; }
+    form.inline { display: inline; }
+    .btn-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+    button { background: var(--accent); color: #111; border: 0; padding: 0.4rem 0.8rem; cursor: pointer; font: inherit; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    button.secondary { background: transparent; color: var(--fg); border: 1px solid var(--line); }
+    .banner { padding: 0.6rem 0.8rem; border: 1px solid var(--line); margin-bottom: 1rem; font-size: 0.9rem; }
+    .probe-banner { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); font-weight: 600; }
+    .probe-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 1.25rem; }
+    .probe-h2 { font-size: 1rem; margin: 0 0 0.65rem; font-weight: 600; }
+    .probe-label { display: block; margin-top: 0.65rem; font-size: 0.85rem; color: var(--muted); }
+    .probe-input { display: block; width: 100%; margin-top: 0.25rem; padding: 0.4rem 0.55rem; font: inherit; color: var(--fg); background: transparent; border: 1px solid var(--line); }
+    .probe-status { margin-top: 1rem; padding: 0.75rem; border: 1px solid var(--line); font-size: 0.8rem; white-space: pre-wrap; overflow: auto; max-height: 22rem; }
+    .progress-wrap { margin-top: 0.85rem; }
+    .progress-meta { display: flex; justify-content: space-between; gap: 1rem; font-size: 0.85rem; margin-bottom: 0.35rem; color: var(--muted); }
+    .progress-bar { height: 0.65rem; background: var(--line); overflow: hidden; }
+    .progress-fill { height: 100%; background: var(--accent); width: 0; transition: width 0.35s ease; }
+    .scanner-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(11.5rem, 1fr)); gap: 0.65rem; margin-top: 0.85rem; }
+    .scanner-card { border: 1px solid var(--line); padding: 0.55rem 0.65rem; }
+    .scanner-card[data-enabled="0"] { opacity: 0.55; }
+    .scanner-head { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; margin-bottom: 0.35rem; }
+    .scanner-badge { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .scanner-badge.on { color: var(--accent); }
+    .scanner-badge.off { color: var(--muted); }
+    .scanner-cov { font-size: 0.82rem; margin-bottom: 0.35rem; }
+    .scanner-bar { height: 0.45rem; }
+    .scanner-run { font-size: 0.78rem; margin-top: 0.35rem; }
+    .note { font-size: 0.85rem; color: var(--muted); margin-top: 2rem; }
+    code { font-size: 0.85em; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>LatentTone</strong>
+    <nav>
+      <a href="/">Home</a>
+      <a href="/artists">Artists</a>
+      <a href="/tracks">Tracks</a>
+      <a href="/lance">LanceDB</a>
+      {{if .EnableStreamProbe}}<a href="/dev/stream">Stream probe</a>{{end}}
+      {{if .EnableAPIDocs}}<a href="/api/docs/">API docs</a>{{end}}
+    </nav>
+  </header>
+  <main>
+{{end}}
+
+{{define "footer"}}
+    {{if .EnableStreamProbe}}
+    <p class="note">Catalog inspector — Phase 3 <a href="/dev/stream">/dev/stream</a> probe is enabled (verification only; not the product client).</p>
+    {{else}}
+    <p class="note">Catalog inspector — browse metadata and features only; no playback.</p>
+    {{end}}
+  </main>
+</body>
+</html>
+{{end}}

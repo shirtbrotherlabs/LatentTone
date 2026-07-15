@@ -1,0 +1,51 @@
+{{define "lance.html"}}
+{{template "header" .}}
+  <h1>LanceDB dump</h1>
+  {{if .Error}}
+    <div class="banner">{{.Error}}</div>
+  {{else}}
+    <div class="banner">
+      <div><code>{{.DBPath}}</code> · table <strong>{{.Table}}</strong></div>
+      <div class="muted">{{.Count}} rows · showing {{.Offset}}–{{.EndExclusive}} · vector preview {{.Preview}} floats</div>
+      {{if .Tables}}
+        <div class="muted">Tables: {{range $i, $t := .Tables}}{{if $i}}, {{end}}{{$t}}{{end}}</div>
+      {{end}}
+      <div style="margin-top:0.75rem">
+        {{if .HasPrev}}<a href="/lance?limit={{.Limit}}&amp;offset={{.PrevOffset}}">← Prev</a>{{end}}
+        {{if and .HasPrev .HasNext}} · {{end}}
+        {{if .HasNext}}<a href="/lance?limit={{.Limit}}&amp;offset={{.NextOffset}}">Next →</a>{{end}}
+        · <a href="/lance?raw=1&amp;limit={{.Limit}}&amp;offset={{.Offset}}">JSON</a>
+      </div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Track</th>
+          <th>Dim</th>
+          <th>Vector head</th>
+          <th>Vector tail</th>
+        </tr>
+      </thead>
+      <tbody>
+      {{range .Rows}}
+        <tr>
+          <td>
+            {{if .Title}}
+              <a href="/tracks/{{.TrackID}}">{{.Title}}</a>
+              <div class="muted">#{{.TrackID}} · {{.Artist}}</div>
+            {{else}}
+              <a href="/tracks/{{.TrackID}}">#{{.TrackID}}</a>
+            {{end}}
+          </td>
+          <td>{{.VectorDim}}</td>
+          <td><code>{{.PreviewText}}</code></td>
+          <td><code>{{.TailText}}</code></td>
+        </tr>
+      {{else}}
+        <tr><td colspan="4" class="muted">No LanceDB rows yet — run an embed with LanceDB enabled.</td></tr>
+      {{end}}
+      </tbody>
+    </table>
+  {{end}}
+{{template "footer" .}}
+{{end}}

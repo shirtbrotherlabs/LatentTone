@@ -1,0 +1,49 @@
+# Phase 2 metadata / embedding tool
+library_root: /music
+database_path: /data/latenttone.db
+
+# Enabled extractors (order = compiled vector concat order)
+extractors:
+  - catalog
+  - filesig
+  - essentia
+  - yamnet
+  - musicnn
+
+model_versions:
+  catalog: "1"
+  filesig: "1"
+  essentia: "music-2.0"
+  yamnet: "1"
+  musicnn: "msd-1"
+
+# Essentia CLI (from MTG image / PATH)
+essentia_binary: essentia_streaming_extractor_music
+essentia_profile: /config/essentia_profile.yaml
+
+# YAMNet / MusiCNN (used when extractors include them)
+ml_helper_path: /usr/local/lib/latenttone/ml_embed_helper.py
+yamnet_model: /models/yamnet/yamnet.tflite
+yamnet_class_map: /models/yamnet/yamnet_class_map.csv
+musicnn_model: /models/musicnn/msd-musicnn-1.onnx
+musicnn_meta: /models/musicnn/msd-musicnn-1.json
+
+# LanceDB on-disk index (Python helper subprocess)
+lancedb_path: /data/lancedb
+lancedb_table: track_vectors
+lance_helper_path: /usr/local/lib/latenttone/lance_helper.py
+
+concurrency: 4
+batch_size: 32
+
+# Sampling — Compose CLI `embed` profile stays a small random smoke subset.
+# The browse UI "Scan acoustic identity" button overrides to sample_mode=all.
+sample_mode: random   # all | random
+max_tracks: 16
+sample_seed: 0        # 0 = time-based; set for reproducible smoke
+
+# Periodic embed while serving (0 disables)
+embed_interval: 0s
+
+# Job control file used when stopping a CLI/Compose embed from another process
+job_control_path: /data/embed.job

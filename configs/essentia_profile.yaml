@@ -1,0 +1,7 @@
+# Essentia music extractor profile (JSON, first 45s for speed)
+startTime: 0
+endTime: 45
+outputFrames: 0
+outputFormat: json
+requireMbid: false
+indent: 0

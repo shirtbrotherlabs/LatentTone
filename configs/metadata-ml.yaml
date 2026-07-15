@@ -1,0 +1,36 @@
+# Small-sample smoke with YAMNet + MusiCNN enabled (Compose profile embed-ml)
+library_root: /music
+database_path: /data/latenttone.db
+
+extractors:
+  - catalog
+  - filesig
+  - essentia
+  - yamnet
+  - musicnn
+
+model_versions:
+  catalog: "1"
+  filesig: "1"
+  essentia: "music-2.0"
+  yamnet: "1"
+  musicnn: "msd-1"
+
+essentia_binary: essentia_streaming_extractor_music
+essentia_profile: /config/essentia_profile.yaml
+ml_helper_path: /usr/local/lib/latenttone/ml_embed_helper.py
+yamnet_model: /models/yamnet/yamnet.tflite
+yamnet_class_map: /models/yamnet/yamnet_class_map.csv
+musicnn_model: /models/musicnn/msd-musicnn-1.onnx
+musicnn_meta: /models/musicnn/msd-musicnn-1.json
+
+lancedb_path: /data/lancedb
+lancedb_table: track_vectors
+lance_helper_path: /usr/local/lib/latenttone/lance_helper.py
+
+concurrency: 2
+sample_mode: random
+max_tracks: 4
+sample_seed: 42
+embed_interval: 0s
+job_control_path: /data/embed.job

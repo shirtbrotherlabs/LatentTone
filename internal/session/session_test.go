@@ -1,0 +1,106 @@
+// Copyright (C) 2026 martinsah
+// SPDX-License-Identifier: GPL-3.0-only
+// Author: martinsah
+// Date: 2026-07-15
+
+package session_test
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+
+	"github.com/shirtbrotherlabs/LatentTone/internal/affinity"
+	"github.com/shirtbrotherlabs/LatentTone/internal/db"
+	"github.com/shirtbrotherlabs/LatentTone/internal/session"
+)
+
+func seedDB(t *testing.T) (*db.DB, int64, int64, int64, int64, int64) {
+	t.Helper()
+	dir := t.TempDir()
+	catalog, err := db.Open(filepath.Join(dir, "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := catalog.CreateUser("u1", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u2, err := catalog.CreateUser("u2", "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id1, err := catalog.UpsertTrack(db.TrackInput{Path: "a/1.mp3", Title: "One", Album: "A", AlbumArtist: "Art", Artists: []string{"Art"}, Format: "mp3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id2, err := catalog.UpsertTrack(db.TrackInput{Path: "a/2.mp3", Title: "Two", Album: "A", AlbumArtist: "Art", Artists: []string{"Art"}, Format: "mp3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id3, err := catalog.UpsertTrack(db.TrackInput{Path: "a/3.mp3", Title: "Three", Album: "A", AlbumArtist: "Art", Artists: []string{"Art"}, Format: "mp3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return catalog, u.ID, u2.ID, id1, id2, id3
+}
+
+func TestSkipAdvancesAndIsolation(t *testing.T) {
+	catalog, userID, user2ID, id1, id2, id3 := seedDB(t)
+	defer catalog.Close()
+
+	w := session.NewWorker(catalog, nil, 4, 2)
+	w.Neighbors = func(ctx context.Context, seedTrackID int64, k int) ([]affinity.Neighbor, error) {
+		return []affinity.Neighbor{
+			{TrackID: id2, Score: 0.9},
+			{TrackID: id3, Score: 0.8},
+		}, nil
+	}
+
+	ctx := context.Background()
+	live, err := w.Create(ctx, userID, id1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if live.NowPlayingID != id1 {
+		t.Fatalf("now=%d", live.NowPlayingID)
+	}
+	before := live.NowPlayingID
+	if err := w.ApplyFeedback(ctx, live, db.SignalSkip, before); err != nil {
+		t.Fatal(err)
+	}
+	if live.NowPlayingID == before {
+		t.Fatal("expected advance on skip")
+	}
+	status := w.ToStatus(live)
+	if status.NowPlaying == nil || status.NowPlaying.TrackID != live.NowPlayingID {
+		t.Fatal("status mismatch")
+	}
+
+	_, err = w.Get(live.ID, user2ID)
+	if err == nil || err.Error() != "forbidden" {
+		t.Fatalf("want forbidden got %v", err)
+	}
+}
+
+func TestUserStateOwnershipHelpers(t *testing.T) {
+	catalog, userID, _, id1, _, _ := seedDB(t)
+	defer catalog.Close()
+	if err := catalog.InsertTrackFeedback(userID, id1, db.SignalLike, "sess"); err != nil {
+		t.Fatal(err)
+	}
+	score, err := catalog.UpsertAffinity(userID, id1, 0.25)
+	if err != nil || score != 0.25 {
+		t.Fatalf("affinity %v %v", score, err)
+	}
+	if err := catalog.AddSkip(userID, id1, db.SkipScopeLibrary, ""); err != nil {
+		t.Fatal(err)
+	}
+	skips, err := catalog.ListSkippedTrackIDs(userID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := skips[id1]; !ok {
+		t.Fatal("skip missing")
+	}
+}

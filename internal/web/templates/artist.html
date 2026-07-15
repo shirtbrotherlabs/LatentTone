@@ -1,0 +1,24 @@
+{{define "artist.html"}}
+{{template "header" .}}
+  <h1>{{.Artist.Name}}</h1>
+  <p class="muted"><a href="/artists">← Artists</a></p>
+  <table>
+    <thead><tr><th></th><th>Album</th><th>Year</th></tr></thead>
+    <tbody>
+    {{range .Albums}}
+      <tr>
+        <td>
+          {{if .CoverPath.Valid}}
+            <a href="/albums/{{.ID}}"><img class="cover-sm" src="/covers/{{.CoverPath.String}}" alt=""></a>
+          {{end}}
+        </td>
+        <td><a href="/albums/{{.ID}}">{{.Title}}</a></td>
+        <td>{{if .Year.Valid}}{{.Year.Int64}}{{end}}</td>
+      </tr>
+    {{else}}
+      <tr><td colspan="3" class="muted">No albums</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+{{template "footer" .}}
+{{end}}

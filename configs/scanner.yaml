@@ -1,0 +1,53 @@
+# LatentTone library scanner configuration
+library_root: /music
+database_path: /data/latenttone.db
+
+# Audio file extensions (lowercase, without dot)
+extensions:
+  - flac
+  - mp3
+  - m4a
+  - aac
+  - ogg
+  - opus
+  - wav
+  - aiff
+
+# Glob patterns relative to library_root (empty = include all)
+include: []
+exclude:
+  - "**/.Trash/**"
+  - "**/@eaDir/**"
+
+concurrency: 4
+
+# Preferred cover art filenames (first match wins), searched in album directory
+cover_names:
+  - cover.jpg
+  - cover.jpeg
+  - cover.png
+  - folder.jpg
+  - folder.jpeg
+  - folder.png
+  - front.jpg
+  - Front.jpg
+  - AlbumArt.jpg
+  - albumart.jpg
+
+# Periodic full reconcile interval (0 disables periodic scans when serving)
+scan_interval: 1h
+
+# HTTP listen address for browse UI
+listen_addr: ":8080"
+
+# Phase 3 — auth & streaming (ADR-005 / ADR-006)
+auth_mode: authenticated          # authenticated | open (solo-dev escape hatch)
+session_ttl: 168h
+secure_cookie: false
+enable_stream_probe: false        # Gate C1: /dev/stream
+enable_api_docs: false            # Phase 3B: /api/docs Swagger UI
+hls_root: /data/hls
+hls_ttl: 2h
+max_concurrent_sessions: 8
+queue_prefetch: 2
+ffmpeg_path: ffmpeg

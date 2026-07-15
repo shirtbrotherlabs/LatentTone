@@ -1,0 +1,140 @@
+{{define "track.html"}}
+{{template "header" .}}
+  <p class="muted">
+    {{if .Track.AlbumID.Valid}}<a href="/albums/{{.Track.AlbumID.Int64}}">← {{.Track.AlbumTitle}}</a>{{else}}<a href="/tracks">← Tracks</a>{{end}}
+  </p>
+  <div class="row">
+    <div>
+      {{if .Track.CoverPath.Valid}}
+        <img class="cover" src="/covers/{{.Track.CoverPath.String}}" alt="">
+      {{end}}
+    </div>
+    <div>
+      <h1>{{.Track.Title}}</h1>
+      <dl class="meta">
+        <dt>Artist</dt><dd>{{.Track.ArtistName}}</dd>
+        <dt>Album</dt><dd>{{.Track.AlbumTitle}}</dd>
+        <dt>Track</dt><dd>{{if .Track.TrackNumber.Valid}}{{.Track.TrackNumber.Int64}}{{else}}—{{end}} / disc {{if .Track.DiscNumber.Valid}}{{.Track.DiscNumber.Int64}}{{else}}1{{end}}</dd>
+        <dt>Duration</dt><dd>{{duration .Track.DurationMS}}</dd>
+        <dt>Genre</dt><dd>{{if .Track.Genres}}{{.Track.Genres}}{{else}}—{{end}}</dd>
+        <dt>Format</dt><dd>{{if .Track.Format.Valid}}{{.Track.Format.String}}{{else}}—{{end}}</dd>
+        <dt>Bitrate</dt><dd>{{if .Track.BitrateKbps.Valid}}{{.Track.BitrateKbps.Int64}} kbps{{else}}—{{end}}</dd>
+        <dt>Sample rate</dt><dd>{{if .Track.SampleRateHz.Valid}}{{.Track.SampleRateHz.Int64}} Hz{{else}}—{{end}}</dd>
+        <dt>Year</dt><dd>{{if .Track.Year.Valid}}{{.Track.Year.Int64}}{{else}}—{{end}}</dd>
+        <dt>Path</dt><dd><code>{{.Track.Path}}</code></dd>
+      </dl>
+    </div>
+  </div>
+
+  <h2 style="margin-top:2rem;font-size:1.1rem">Feature extraction</h2>
+  <dl class="meta">
+    <dt>Status</dt><dd><strong>{{.VecStatus}}</strong>{{if .VecError}} — {{.VecError}}{{end}}</dd>
+    <dt>Extractor set</dt><dd>{{if .ExtractorSet}}{{.ExtractorSet}}{{else}}—{{end}}</dd>
+    <dt>Model versions</dt><dd><code>{{if .ModelVersions}}{{.ModelVersions}}{{else}}—{{end}}</code></dd>
+    <dt>Compiled dim</dt><dd>{{if .VectorDim}}{{.VectorDim}}{{else}}—{{end}}</dd>
+  </dl>
+  {{range .Features}}
+    <h3 style="font-size:1rem;margin-top:1rem">{{.Extractor}} <span class="muted">(v{{.ModelVersion}}, dim {{.VectorDim}})</span></h3>
+    <pre style="overflow:auto;padding:0.75rem;border:1px solid var(--line);font-size:0.8rem">{{.PrettyJSON}}</pre>
+  {{else}}
+    <p class="muted">No stored features yet — run an embed (random subset by default).</p>
+  {{end}}
+
+  {{if eq .VecStatus "ready"}}
+  <h2 style="margin-top:2rem;font-size:1.1rem">Neighbor playlist</h2>
+  <div class="banner" id="playlist-panel" data-track-id="{{.Track.ID}}">
+    <div class="btn-row">
+      <button type="button" id="btn-gen-playlist">Generate neighbor playlist</button>
+      <label class="muted" style="display:inline-flex;align-items:center;gap:0.35rem">
+        Length
+        <input id="playlist-length" type="number" min="1" max="100" value="20" style="width:4rem;font:inherit;background:transparent;color:var(--fg);border:1px solid var(--line);padding:0.2rem 0.35rem">
+      </label>
+    </div>
+    <div class="muted" id="playlist-status" style="margin-top:0.5rem"></div>
+    <div id="playlist-result" hidden style="margin-top:0.75rem">
+      <div id="playlist-link" style="margin-bottom:0.5rem"></div>
+      <table>
+        <thead><tr><th>#</th><th>Score</th><th>Title</th><th>Artist</th></tr></thead>
+        <tbody id="playlist-body"></tbody>
+      </table>
+    </div>
+  </div>
+  {{if .RecentPlaylists}}
+  <p class="muted" style="margin-top:0.75rem">Recent from this seed:</p>
+  <ul>
+    {{range .RecentPlaylists}}
+      <li><a href="/playlists/{{.ID}}">{{.Name}}</a> <span class="muted">({{.Length}} · {{.CreatedAt}})</span></li>
+    {{end}}
+  </ul>
+  {{end}}
+  <script>
+  (function () {
+    var panel = document.getElementById('playlist-panel');
+    if (!panel) return;
+    var btn = document.getElementById('btn-gen-playlist');
+    var status = document.getElementById('playlist-status');
+    var result = document.getElementById('playlist-result');
+    var body = document.getElementById('playlist-body');
+    var link = document.getElementById('playlist-link');
+    var lenInput = document.getElementById('playlist-length');
+    btn.addEventListener('click', function () {
+      btn.disabled = true;
+      status.textContent = 'Generating…';
+      result.hidden = true;
+      var length = parseInt(lenInput.value, 10) || 20;
+      fetch('/api/v1/playlists', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({ seed_track_id: Number(panel.dataset.trackId), length: length })
+      }).then(function (r) {
+        return r.json().then(function (data) {
+          if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+          return data;
+        });
+      }).then(function (data) {
+        status.textContent = 'Created playlist #' + data.id + ' (' + data.length + ' tracks)';
+        link.innerHTML = '<a href="/playlists/' + data.id + '">Open playlist page →</a>';
+        body.innerHTML = '';
+        (data.tracks || []).forEach(function (t) {
+          var tr = document.createElement('tr');
+          var score = (t.score === null || t.score === undefined) ? 'seed' : Number(t.score).toFixed(3);
+          tr.innerHTML = '<td>' + t.position + '</td><td>' + score + '</td>' +
+            '<td><a href="/tracks/' + t.track_id + '">' + escapeHtml(t.title || ('#' + t.track_id)) + '</a></td>' +
+            '<td>' + escapeHtml(t.artist || '') + '</td>';
+          body.appendChild(tr);
+        });
+        result.hidden = false;
+      }).catch(function (err) {
+        status.textContent = 'Error: ' + err.message;
+      }).finally(function () {
+        btn.disabled = false;
+      });
+    });
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, function (c) {
+        return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+      });
+    }
+  })();
+  </script>
+  {{end}}
+
+  {{if .Neighbors}}
+  <h2 style="margin-top:2rem;font-size:1.1rem">Similar tracks</h2>
+  <table>
+    <thead><tr><th>Score</th><th>Title</th><th>Artist</th><th>Album</th></tr></thead>
+    <tbody>
+    {{range .Neighbors}}
+      <tr>
+        <td>{{printf "%.3f" .Score}}</td>
+        <td><a href="/tracks/{{.Track.ID}}">{{.Track.Title}}</a></td>
+        <td>{{.Track.ArtistName}}</td>
+        <td>{{.Track.AlbumTitle}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{end}}
+{{template "footer" .}}
+{{end}}
+

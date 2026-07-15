@@ -1,0 +1,165 @@
+{{define "home.html"}}
+{{template "header" .}}
+  <h1>Library catalog</h1>
+  {{if .EnableStreamProbe}}
+  <div class="banner probe-banner">
+    Phase 3 verification probe — not the product client.
+    <a href="/dev/stream">Open /dev/stream</a> to exercise auth, listening sessions, playback, and feedback.
+  </div>
+  {{end}}
+  <div class="banner">
+    <div><strong>{{.Artists}}</strong> artists · <strong>{{.Albums}}</strong> albums · <strong>{{.Tracks}}</strong> tracks</div>
+    {{if .LastScan}}<div class="muted">Last scan: {{.LastScan}}</div>{{end}}
+    {{if .Scanning}}<div class="muted">Scan in progress…</div>{{end}}
+    <div class="btn-row" style="margin-top:0.75rem">
+      <form class="inline" method="post" action="/scan">
+        <button type="submit" {{if .Scanning}}disabled{{end}}>Run library scan</button>
+      </form>
+      <form class="inline" method="post" action="/embed/start">
+        <button type="submit" {{if .EmbedRunning}}disabled{{end}} title="Processes all pending tracks with {{.EmbedConcurrency}} parallel workers">Scan acoustic identity</button>
+      </form>
+      <form class="inline" method="post" action="/embed/stop">
+        <button type="submit" class="secondary" {{if not .EmbedRunning}}disabled{{end}}>Stop identity scan</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="banner" id="identity-panel"
+       data-running="{{if .EmbedRunning}}1{{else}}0{{end}}"
+       data-ready="{{.IdentityReady}}"
+       data-catalog="{{.Tracks}}">
+    <div><strong>Acoustic identity</strong>
+      <span class="muted">(web: all pending tracks · {{.EmbedConcurrency}} parallel workers)</span>
+    </div>
+    <div class="muted" id="identity-coverage">
+      Compiled vector coverage: <strong id="cov-ready">{{.IdentityReady}}</strong> /
+      <strong id="cov-total">{{.Tracks}}</strong> tracks ready
+      {{if .IdentityPending}} · {{.IdentityPending}} pending{{end}}
+      {{if .IdentityProcessing}} · {{.IdentityProcessing}} processing{{end}}
+    </div>
+    {{if .LastEmbed}}<div class="muted" id="identity-last">Last run: {{.LastEmbed}}</div>{{end}}
+
+    <div class="scanner-grid" id="scanner-grid" aria-label="Acoustic scanners">
+      {{range .Scanners}}
+      <div class="scanner-card" data-scanner="{{.name}}" data-enabled="{{if .enabled}}1{{else}}0{{end}}">
+        <div class="scanner-head">
+          <strong>{{.label}}</strong>
+          <span class="scanner-badge {{if .enabled}}on{{else}}off{{end}}" data-role="badge">{{if .enabled}}enabled{{else}}off{{end}}</span>
+        </div>
+        <div class="muted scanner-cov" data-role="coverage">
+          <span data-role="ready">{{.ready}}</span> / <span data-role="total">{{.total}}</span> tracks
+          (<span data-role="pct">{{.pct}}</span>%)
+        </div>
+        <div class="progress-bar scanner-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{.pct}}">
+          <div class="progress-fill" data-role="fill" style="width: {{.pct}}%"></div>
+        </div>
+        <div class="muted scanner-run" data-role="run" hidden>Scan: —</div>
+      </div>
+      {{end}}
+    </div>
+
+    <div id="identity-progress-wrap" class="progress-wrap" {{if not .EmbedRunning}}hidden{{end}}>
+      <div class="progress-meta">
+        <span id="progress-label">Scan in progress…</span>
+        <span id="progress-counts">{{.EmbedDone}} / {{.EmbedClaimed}}</span>
+      </div>
+      <div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{.EmbedPct}}">
+        <div class="progress-fill" id="progress-fill" style="width: {{.EmbedPct}}%"></div>
+      </div>
+    </div>
+  </div>
+
+  <p>Browse by <a href="/artists">Artist</a> → Album → Track, jump to <a href="/tracks">Tracks</a>, or inspect the <a href="/lance">LanceDB dump</a>.</p>
+
+  <script>
+  (function () {
+    var panel = document.getElementById('identity-panel');
+    if (!panel) return;
+    var wrap = document.getElementById('identity-progress-wrap');
+    var fill = document.getElementById('progress-fill');
+    var counts = document.getElementById('progress-counts');
+    var label = document.getElementById('progress-label');
+    var covReady = document.getElementById('cov-ready');
+    var covTotal = document.getElementById('cov-total');
+    var lastEl = document.getElementById('identity-last');
+    var timer = null;
+    var wasRunning = panel.dataset.running === '1';
+
+    function pct(done, claimed) {
+      if (!claimed) return 0;
+      return Math.min(100, Math.round(100 * done / claimed));
+    }
+
+    function applyScanners(scanners, running, claimed) {
+      if (!scanners || !scanners.length) return;
+      scanners.forEach(function (s) {
+        var card = document.querySelector('.scanner-card[data-scanner="' + s.name + '"]');
+        if (!card) return;
+        var badge = card.querySelector('[data-role="badge"]');
+        var ready = card.querySelector('[data-role="ready"]');
+        var total = card.querySelector('[data-role="total"]');
+        var pctEl = card.querySelector('[data-role="pct"]');
+        var barFill = card.querySelector('[data-role="fill"]');
+        var runEl = card.querySelector('[data-role="run"]');
+        var bar = card.querySelector('.scanner-bar');
+        if (ready) ready.textContent = s.ready;
+        if (total) total.textContent = s.total;
+        if (pctEl) pctEl.textContent = s.pct;
+        if (barFill) barFill.style.width = (s.pct || 0) + '%';
+        if (bar) bar.setAttribute('aria-valuenow', s.pct || 0);
+        card.dataset.enabled = s.enabled ? '1' : '0';
+        if (badge) {
+          badge.textContent = s.enabled ? 'enabled' : 'off';
+          badge.className = 'scanner-badge ' + (s.enabled ? 'on' : 'off');
+        }
+        if (runEl) {
+          if (running && s.enabled) {
+            runEl.hidden = false;
+            var runLine = (s.run_ok || 0) + ' ok';
+            if (s.run_errors) runLine += ', ' + s.run_errors + ' err';
+            if (claimed) runLine += ' · ' + Math.min(100, Math.round(100 * (s.run_done || 0) / claimed)) + '% of run';
+            runEl.textContent = 'This run: ' + runLine;
+          } else {
+            runEl.hidden = true;
+          }
+        }
+      });
+    }
+
+    function apply(data) {
+      if (covReady) covReady.textContent = data.ready;
+      if (covTotal) covTotal.textContent = data.catalog_tracks;
+      applyScanners(data.scanners, data.running, data.claimed);
+      if (data.running) {
+        wrap.hidden = false;
+        var p = pct(data.done, data.claimed);
+        fill.style.width = p + '%';
+        counts.textContent = data.done + ' / ' + data.claimed;
+        label.textContent = data.claimed
+          ? ('Scanning acoustic identity… ' + data.ok + ' ok' + (data.errors ? (', ' + data.errors + ' err') : ''))
+          : 'Starting acoustic identity scan…';
+        panel.dataset.running = '1';
+        wasRunning = true;
+      } else {
+        if (wasRunning) {
+          window.location.reload();
+          return;
+        }
+        wrap.hidden = true;
+        if (lastEl && data.last) lastEl.textContent = 'Last run: ' + data.last;
+      }
+    }
+
+    function tick() {
+      fetch('/api/embed/status', { headers: { 'Accept': 'application/json' } })
+        .then(function (r) { return r.json(); })
+        .then(apply)
+        .catch(function () {});
+    }
+
+    timer = setInterval(tick, wasRunning ? 1500 : 4000);
+    tick();
+  })();
+  </script>
+{{template "footer" .}}
+{{end}}

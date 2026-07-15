@@ -1,0 +1,20 @@
+{{define "tracks.html"}}
+{{template "header" .}}
+  <h1>Tracks</h1>
+  <table>
+    <thead><tr><th>Title</th><th>Artist</th><th>Album</th><th>Duration</th></tr></thead>
+    <tbody>
+    {{range .Tracks}}
+      <tr>
+        <td><a href="/tracks/{{.ID}}">{{.Title}}</a></td>
+        <td>{{.ArtistName}}</td>
+        <td>{{.AlbumTitle}}</td>
+        <td>{{duration .DurationMS}}</td>
+      </tr>
+    {{else}}
+      <tr><td colspan="4" class="muted">No tracks yet — run a scan.</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+{{template "footer" .}}
+{{end}}

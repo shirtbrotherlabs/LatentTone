@@ -1,0 +1,15 @@
+{{define "artists.html"}}
+{{template "header" .}}
+  <h1>Artists</h1>
+  <table>
+    <thead><tr><th>Name</th></tr></thead>
+    <tbody>
+    {{range .Artists}}
+      <tr><td><a href="/artists/{{.ID}}">{{.Name}}</a></td></tr>
+    {{else}}
+      <tr><td class="muted">No artists yet — run a scan.</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+{{template "footer" .}}
+{{end}}

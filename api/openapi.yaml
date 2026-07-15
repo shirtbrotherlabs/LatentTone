@@ -1,0 +1,1037 @@
+openapi: 3.0.3
+info:
+  title: LatentTone Product API
+  description: |
+    Phase 2+3 HTTP product surface for LatentTone (auth, sessions, stream/HLS,
+    feedback, neighbor playlists, Phase 3C user playlists, embed status).
+
+    **Try it out:** call `POST /api/v1/auth/login` (or register), copy the
+    response `token`, click **Authorize**, and paste it as a Bearer token.
+    The HTTP-only cookie `lt_session` works for same-origin browser clients but
+    is not the Swagger UI default.
+
+    Swagger UI is flag-gated (`enable_api_docs`) and is **not** a substitute for
+    Phase 3 stream-smoke Gates A–D or `/dev/stream`.
+  version: 0.3.1
+  contact:
+    name: martinsah
+  license:
+    name: GPL-3.0-only
+    url: https://www.gnu.org/licenses/gpl-3.0.html
+
+servers:
+  - url: /
+    description: Same origin as latenttone serve
+
+tags:
+  - name: auth
+    description: Registration, login, logout, and current user
+  - name: sessions
+    description: Listening session lifecycle and short-poll status
+  - name: feedback
+    description: Binary / ordinal signals that steer session trajectory
+  - name: stream
+    description: HLS and progressive media (binary; Try-it limitations apply)
+  - name: playlists
+    description: Phase 2 neighbor playlist API (operator; auth optional)
+  - name: me-playlists
+    description: Phase 3C user-owned playlist CRUD (auth required; ADR-008)
+  - name: embed
+    description: Acoustic embed job progress
+
+paths:
+  /api/v1/auth/register:
+    post:
+      tags: [auth]
+      summary: Register a user
+      description: |
+        Creates a user and issues an opaque session token. Also sets HTTP-only
+        cookie `lt_session`. Use the JSON `token` value with Bearer auth in Swagger.
+      operationId: authRegister
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Credentials'
+            example:
+              username: alice
+              password: secretpass
+      responses:
+        '201':
+          description: Created
+          headers:
+            Set-Cookie:
+              description: HTTP-only session cookie `lt_session=<token>`
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSuccess'
+        '400':
+          $ref: '#/components/responses/Error'
+        '409':
+          description: Username already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/auth/login:
+    post:
+      tags: [auth]
+      summary: Log in
+      description: |
+        Validates credentials and returns `user` + `token`. Sets cookie `lt_session`.
+        Failed attempts may be rate-limited (429) depending on server policy.
+      operationId: authLogin
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Credentials'
+            example:
+              username: alice
+              password: secretpass
+      responses:
+        '200':
+          description: OK
+          headers:
+            Set-Cookie:
+              description: HTTP-only session cookie `lt_session=<token>`
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSuccess'
+        '401':
+          $ref: '#/components/responses/Error'
+        '429':
+          description: Too many login attempts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/auth/logout:
+    post:
+      tags: [auth]
+      summary: Log out
+      description: Invalidates the current session token and clears cookie `lt_session`.
+      operationId: authLogout
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      responses:
+        '200':
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: string
+                    example: "true"
+
+  /api/v1/auth/me:
+    get:
+      tags: [auth]
+      summary: Current user
+      description: Returns the authenticated user. Authorize with Bearer token from login/register.
+      operationId: authMe
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/sessions:
+    post:
+      tags: [sessions]
+      summary: Create listening session
+      description: |
+        Starts a session from `seed_track_id`. Returns short-poll status including
+        `now_playing`, `queue`, `hls_url`, and `progressive_url`.
+
+        Warning: long-lived sessions hold HLS disk under `hls_root`; always DELETE
+        when finished. Swagger Try-it is for contract probing, not Gate B listen verification.
+      operationId: createSession
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSessionRequest'
+            example:
+              seed_track_id: 1
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionStatus'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '503':
+          description: Too many concurrent sessions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/sessions/{id}:
+    get:
+      tags: [sessions]
+      summary: Session status (short-poll)
+      description: Poll for `now_playing`, `queue`, and `last_feedback`.
+      operationId: getSession
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SessionID'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionStatus'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [sessions]
+      summary: Stop session
+      description: Stops the session and cleans up session HLS files when possible.
+      operationId: stopSession
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SessionID'
+      responses:
+        '200':
+          description: Stopped
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionStatus'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/sessions/{id}/feedback:
+    post:
+      tags: [feedback]
+      summary: Apply feedback signal
+      description: |
+        Signals: `like`, `dislike`, `skip`, `ban`. Optional `track_id` defaults to
+        the session's current now-playing track. Response is the updated session status
+        (field names match `stream_smoke.sh`).
+      operationId: postFeedback
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SessionID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FeedbackRequest'
+            example:
+              signal: skip
+              track_id: 1
+      responses:
+        '200':
+          description: Applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionStatus'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/sessions/{id}/hls/index.m3u8:
+    get:
+      tags: [stream]
+      summary: HLS media playlist
+      description: |
+        Returns an HLS playlist (`application/vnd.apple.mpegurl`).
+
+        **Try-it limitation:** Swagger UI is not an HLS player. The response body is
+        playlist text (or a download). Use `/dev/stream` or Gate B for real playback.
+      operationId: getHLSPlaylist
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SessionID'
+      responses:
+        '200':
+          description: HLS playlist
+          content:
+            application/vnd.apple.mpegurl:
+              schema:
+                type: string
+                format: binary
+            application/x-mpegURL:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          description: Playlist not ready or session missing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: HLS unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/sessions/{id}/hls/{segment}:
+    get:
+      tags: [stream]
+      summary: HLS media segment
+      description: |
+        Returns a binary MPEG-TS segment (typically `*.ts`, `video/mp2t`).
+
+        **Try-it limitation:** Swagger will download opaque binary; it will not decode
+        or play audio/video. Prefer a media player pointed at `index.m3u8`.
+      operationId: getHLSSegment
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SessionID'
+        - name: segment
+          in: path
+          required: true
+          description: Segment filename (e.g. `segment000.ts`)
+          schema:
+            type: string
+            example: segment000.ts
+      responses:
+        '200':
+          description: Binary segment
+          content:
+            video/mp2t:
+              schema:
+                type: string
+                format: binary
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/tracks/{id}/stream:
+    get:
+      tags: [stream]
+      summary: Progressive track stream
+      description: |
+        Progressive fallback media for a catalog track. Content-Type depends on
+        file extension (`audio/mpeg`, `audio/flac`, …).
+
+        **Try-it limitation:** binary download in Swagger; not a substitute for
+        Gate B or `/dev/stream` listening.
+      operationId: streamTrack
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            example: 1
+      responses:
+        '200':
+          description: Audio bytes
+          content:
+            audio/mpeg:
+              schema:
+                type: string
+                format: binary
+            audio/flac:
+              schema:
+                type: string
+                format: binary
+            audio/ogg:
+              schema:
+                type: string
+                format: binary
+            audio/mp4:
+              schema:
+                type: string
+                format: binary
+            audio/wav:
+              schema:
+                type: string
+                format: binary
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/playlists:
+    post:
+      tags: [playlists]
+      summary: Create neighbor playlist
+      description: |
+        Operator API (auth not required per ADR-005 / ADR-008). Generates a k-NN
+        neighbor playlist from `seed_track_id`. When a session cookie/Bearer is
+        present, `user_id` is stored on the playlist row. There is no list-all
+        GET on this path; fetch by id via `GET /api/v1/playlists/{id}`.
+      operationId: createPlaylist
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePlaylistRequest'
+            example:
+              seed_track_id: 418
+              length: 20
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Playlist'
+        '400':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/playlists/{id}:
+    get:
+      tags: [playlists]
+      summary: Get playlist by id
+      description: Operator API (auth not required). Returns playlist metadata and track rows.
+      operationId: getPlaylist
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Playlist'
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/me/playlists:
+    get:
+      tags: [me-playlists]
+      summary: List my user playlists
+      description: Returns `kind=user` playlists owned by the caller (headers only).
+      operationId: listMyPlaylists
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MyPlaylistList'
+        '401':
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [me-playlists]
+      summary: Create empty user playlist
+      operationId: createMyPlaylist
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserPlaylistRequest'
+            example:
+              name: Late night
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Playlist'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/me/playlists/from-neighbor:
+    post:
+      tags: [me-playlists]
+      summary: Copy neighbor playlist into my library
+      description: |
+        Copies an existing `kind=neighbor` playlist into a new `kind=user`
+        playlist owned by the caller (optional rename).
+      operationId: copyNeighborPlaylist
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FromNeighborPlaylistRequest'
+            example:
+              playlist_id: 1
+              name: Saved neighbors
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Playlist'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/me/playlists/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+    get:
+      tags: [me-playlists]
+      summary: Get my playlist
+      description: Owner-only; non-owner receives 404.
+      operationId: getMyPlaylist
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Playlist'
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [me-playlists]
+      summary: Rename my playlist
+      operationId: renameMyPlaylist
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserPlaylistRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Playlist'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [me-playlists]
+      summary: Delete my playlist
+      operationId: deleteMyPlaylist
+      responses:
+        '200':
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/me/playlists/{id}/tracks:
+    post:
+      tags: [me-playlists]
+      summary: Add track(s) to my playlist
+      operationId: addMyPlaylistTracks
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddPlaylistTracksRequest'
+            example:
+              track_ids: [418, 419]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Playlist'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/me/playlists/{id}/tracks/{track_id}:
+    delete:
+      tags: [me-playlists]
+      summary: Remove a track from my playlist
+      description: Removes the first occurrence of `track_id` and renumbers positions.
+      operationId: removeMyPlaylistTrack
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+        - name: track_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Playlist'
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/me/playlists/{id}/tracks/order:
+    put:
+      tags: [me-playlists]
+      summary: Reorder playlist tracks
+      description: |
+        Full-order replace. `track_ids` must be a permutation of current membership
+        (same multiset); positions rewritten transactionally to dense 0..n-1.
+      operationId: reorderMyPlaylistTracks
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReorderPlaylistTracksRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Playlist'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /api/embed/status:
+    get:
+      tags: [embed]
+      summary: Embed / acoustic scan status
+      description: |
+        Operator job progress JSON (also served as HTML twin at `/embed/status`
+        for browsers). Includes catalog coverage counters and per-scanner rows.
+      operationId: embedStatus
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmbedStatus'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: |
+        Opaque session id from login/register JSON field `token`.
+        Preferred for Swagger Try it out: Authorize → Bearer `<token>`.
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: lt_session
+      description: |
+        HTTP-only cookie set on register/login. Same-origin browser clients use
+        this automatically; Swagger Try-it defaults to Bearer instead.
+
+  parameters:
+    SessionID:
+      name: id
+      in: path
+      required: true
+      description: Listening session id (opaque)
+      schema:
+        type: string
+
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+
+    Credentials:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        username:
+          type: string
+      required: [id, username]
+
+    AuthSuccess:
+      type: object
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+        token:
+          type: string
+          description: Opaque Bearer token (same value as cookie lt_session)
+      required: [user, token]
+
+    CreateSessionRequest:
+      type: object
+      required: [seed_track_id]
+      properties:
+        seed_track_id:
+          type: integer
+          format: int64
+          minimum: 1
+
+    TrackRef:
+      type: object
+      properties:
+        track_id:
+          type: integer
+          format: int64
+        score:
+          type: number
+          format: double
+
+    FeedbackAck:
+      type: object
+      properties:
+        signal:
+          type: string
+          enum: [like, dislike, skip, ban]
+        track_id:
+          type: integer
+          format: int64
+        at:
+          type: string
+          description: Server timestamp string
+
+    SessionStatus:
+      type: object
+      description: Short-poll status DTO (aligned with session.StatusDTO / stream_smoke.sh)
+      properties:
+        id:
+          type: string
+        user_id:
+          type: integer
+          format: int64
+        status:
+          type: string
+        seed_track_id:
+          type: integer
+          format: int64
+        now_playing:
+          $ref: '#/components/schemas/TrackRef'
+        queue:
+          type: array
+          items:
+            $ref: '#/components/schemas/TrackRef'
+        last_feedback:
+          $ref: '#/components/schemas/FeedbackAck'
+        hls_url:
+          type: string
+          example: /api/v1/sessions/{id}/hls/index.m3u8
+        progressive_url:
+          type: string
+          example: /api/v1/tracks/{id}/stream
+
+    FeedbackRequest:
+      type: object
+      required: [signal]
+      properties:
+        signal:
+          type: string
+          enum: [like, dislike, skip, ban]
+        track_id:
+          type: integer
+          format: int64
+          description: Defaults to now-playing when omitted or zero
+
+    CreatePlaylistRequest:
+      type: object
+      required: [seed_track_id]
+      properties:
+        seed_track_id:
+          type: integer
+          format: int64
+          minimum: 1
+        length:
+          type: integer
+        name:
+          type: string
+
+    CreateUserPlaylistRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+
+    FromNeighborPlaylistRequest:
+      type: object
+      required: [playlist_id]
+      properties:
+        playlist_id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Source neighbor playlist id
+        name:
+          type: string
+          description: Optional new name; defaults to source name
+
+    AddPlaylistTracksRequest:
+      type: object
+      properties:
+        track_id:
+          type: integer
+          format: int64
+        track_ids:
+          type: array
+          items:
+            type: integer
+            format: int64
+      description: Provide `track_id` and/or `track_ids` (appended in order).
+
+    ReorderPlaylistTracksRequest:
+      type: object
+      required: [track_ids]
+      properties:
+        track_ids:
+          type: array
+          items:
+            type: integer
+            format: int64
+
+    MyPlaylistList:
+      type: object
+      properties:
+        playlists:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlaylistHeader'
+
+    PlaylistHeader:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        seed_track_id:
+          type: integer
+          format: int64
+          nullable: true
+        user_id:
+          type: integer
+          format: int64
+          nullable: true
+        kind:
+          type: string
+          enum: [neighbor, user]
+        length:
+          type: integer
+        created_at:
+          type: string
+        updated_at:
+          type: string
+
+    PlaylistTrack:
+      type: object
+      properties:
+        position:
+          type: integer
+        track_id:
+          type: integer
+          format: int64
+        score:
+          type: number
+          nullable: true
+        title:
+          type: string
+        artist:
+          type: string
+        album:
+          type: string
+        duration_ms:
+          type: integer
+          format: int64
+
+    Playlist:
+      allOf:
+        - $ref: '#/components/schemas/PlaylistHeader'
+        - type: object
+          properties:
+            tracks:
+              type: array
+              items:
+                $ref: '#/components/schemas/PlaylistTrack'
+
+    EmbedStatus:
+      type: object
+      properties:
+        running:
+          type: boolean
+        claimed:
+          type: integer
+        done:
+          type: integer
+        ok:
+          type: integer
+        errors:
+          type: integer
+        last:
+          type: string
+        ready:
+          type: integer
+        pending:
+          type: integer
+        processing:
+          type: integer
+        error:
+          type: integer
+        stale:
+          type: integer
+        catalog_tracks:
+          type: integer
+        scanners:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        extractors:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+
+security:
+  - bearerAuth: []

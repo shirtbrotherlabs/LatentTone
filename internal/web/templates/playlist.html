@@ -1,0 +1,29 @@
+{{define "playlist.html"}}
+{{template "header" .}}
+  {{if .Playlist.SeedTrackID.Valid}}
+  <p class="muted"><a href="/tracks/{{.Playlist.SeedTrackID.Int64}}">← Seed track</a></p>
+  {{end}}
+  <h1>{{.Playlist.Name}}</h1>
+  <div class="banner">
+    <div class="muted">{{.Playlist.Kind}} · {{.Playlist.Length}} tracks · created {{.Playlist.CreatedAt}}</div>
+    <div class="muted">API: <code>GET /api/v1/playlists/{{.Playlist.ID}}</code></div>
+  </div>
+  <table>
+    <thead><tr><th>#</th><th>Score</th><th>Title</th><th>Artist</th><th>Album</th><th>Duration</th></tr></thead>
+    <tbody>
+    {{range .Entries}}
+      <tr>
+        <td>{{.Position}}</td>
+        <td>{{if .Score.Valid}}{{printf "%.3f" .Score.Float64}}{{else}}seed{{end}}</td>
+        <td>{{if .Track}}<a href="/tracks/{{.Track.ID}}">{{.Track.Title}}</a>{{else}}#{{.TrackID}}{{end}}</td>
+        <td>{{if .Track}}{{.Track.ArtistName}}{{end}}</td>
+        <td>{{if .Track}}{{.Track.AlbumTitle}}{{end}}</td>
+        <td>{{if .Track}}{{duration .Track.DurationMS}}{{end}}</td>
+      </tr>
+    {{else}}
+      <tr><td colspan="6" class="muted">Empty playlist.</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+{{template "footer" .}}
+{{end}}

@@ -1,0 +1,10 @@
+data/
+.env
+*.db
+*.db-*
+
+# ML weight caches (fetched at image build)
+models/**/*.onnx
+models/**/*.tflite
+models/**/*.csv
+!models/README.md

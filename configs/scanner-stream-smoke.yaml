@@ -1,0 +1,42 @@
+# LatentTone library scanner — stream-smoke / Gate C probe overlay
+# Compose: docker compose --profile stream-smoke up -d --build browse-stream
+# Then open http://localhost:${BROWSE_PORT:-8080}/dev/stream
+# API docs: http://localhost:${BROWSE_PORT:-8080}/api/docs/ (enable_api_docs: true)
+library_root: /music
+database_path: /data/latenttone.db
+
+extensions:
+  - flac
+  - mp3
+  - m4a
+  - aac
+  - ogg
+  - opus
+  - wav
+  - aiff
+
+include: []
+exclude:
+  - "**/.Trash/**"
+  - "**/@eaDir/**"
+
+concurrency: 4
+cover_names:
+  - cover.jpg
+  - cover.jpeg
+  - cover.png
+  - folder.jpg
+
+scan_interval: 0s
+listen_addr: ":8080"
+
+auth_mode: authenticated
+session_ttl: 24h
+secure_cookie: false
+enable_stream_probe: true
+enable_api_docs: true
+hls_root: /data/hls
+hls_ttl: 1h
+max_concurrent_sessions: 4
+queue_prefetch: 2
+ffmpeg_path: ffmpeg
