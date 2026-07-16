@@ -52,9 +52,22 @@ docker compose --profile embed run --rm embed
 # Stop a running embed (CLI / job control file)
 docker compose run --rm browse embed --meta /config/metadata.yaml --stop
 
-# Phase 3 stream smoke (auth → session → stream → skip)
+# Phase 3 stream smoke (auth → session → stream → skip ×2)
 ./scripts/stream_smoke.sh
+
+# Layered developer regression (test-checkout)
+./scripts/test_checkout.sh --suite browse    # default: go test + scan + SPA/operator routes
+./scripts/test_checkout.sh --suite stream    # + Gate B stream/skip (required for session/audio changes)
+./scripts/test_checkout.sh --suite full      # + embed + neighbor playlist (pre-tag / Gate D–class)
+./scripts/test_checkout.sh --ref HEAD --suite fast
 ```
+
+| Suite | Includes |
+|-------|----------|
+| `fast` | `go test -mod=vendor ./...` |
+| `browse` | `fast` + `smoke.sh` (`/`→`/app/`, `/browse`, config) |
+| `stream` | `browse` + `stream_smoke.sh` (progressive audio + **two skips** with post-skip bytes) |
+| `full` | `stream` + Compose `embed` + neighbor / from-neighbor API |
 
 Compose mounts `${MUSIC_LIBRARY}:/music:ro` — never mount the library read-write.
 
