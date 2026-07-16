@@ -2,7 +2,7 @@
  * Copyright (C) 2026 martinsah
  * SPDX-License-Identifier: GPL-3.0-only
  * Author: martinsah
- * Date: 2026-07-15
+ * Date: 2026-07-16
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -128,6 +128,44 @@ function formatTime(sec: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+function formatStreamCodec(codec?: string): string {
+  const c = (codec || "").trim().toLowerCase();
+  if (!c) return "";
+  switch (c) {
+    case "mp3":
+    case "mpeg":
+      return "MP3";
+    case "aac":
+    case "m4a":
+    case "mp4":
+      return "AAC";
+    case "flac":
+      return "FLAC";
+    case "opus":
+      return "OPUS";
+    case "ogg":
+    case "vorbis":
+      return "OGG";
+    case "wav":
+    case "wave":
+      return "WAV";
+    default:
+      return c.toUpperCase();
+  }
+}
+
+function fallbackStreamCodec(format?: string | null): string | undefined {
+  const f = (format || "").trim().toLowerCase();
+  if (!f) return undefined;
+  if (f.includes("flac")) return "flac";
+  if (f.includes("opus")) return "opus";
+  if (f.includes("mp3") || f.includes("mpeg")) return "mp3";
+  if (f.includes("aac") || f.includes("m4a") || f.includes("mp4")) return "aac";
+  if (f.includes("wav")) return "wav";
+  if (f.includes("ogg") || f.includes("vorbis")) return "ogg";
+  return f;
+}
+
 function Spectrum({ active }: { active: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const { getAnalyser } = usePlayer();
@@ -187,6 +225,18 @@ function Spectrum({ active }: { active: boolean }) {
 
   if (!active) return null;
   return <canvas ref={canvasRef} className="fp-spectrum" aria-hidden />;
+}
+
+function StreamBadge({ codec, bitrateKbps }: { codec?: string; bitrateKbps?: number }) {
+  const label = formatStreamCodec(codec);
+  if (!label) return null;
+  const rate = typeof bitrateKbps === "number" && bitrateKbps > 0 ? bitrateKbps : null;
+  return (
+    <div className="fp-stream-badge" title={rate ? `${label} · ${rate} kbps` : label}>
+      <span className="fp-stream-badge-codec">{label}</span>
+      {rate != null ? <span className="fp-stream-badge-rate">{rate}</span> : null}
+    </div>
+  );
 }
 
 export function FloatingPlayer() {
@@ -308,8 +358,20 @@ export function FloatingPlayer() {
   const artist = nowTrack?.artist || "Loading metadata…";
   const album = nowTrack?.album;
   const coverUrl = nowTrack?.cover_url;
-  const seekMax = duration > 0 ? duration : 0;
+  // Live FFmpeg progressive pipes often omit media duration; fall back to catalog.
+  const catalogDurSec =
+    typeof nowTrack?.duration_ms === "number" && nowTrack.duration_ms > 0
+      ? nowTrack.duration_ms / 1000
+      : 0;
+  const seekMax = duration > 0 ? duration : catalogDurSec;
   const seekVal = seekMax > 0 ? Math.min(currentTime, seekMax) : 0;
+  const streamMetaIsCurrent = !status.stream_track_id || status.stream_track_id === trackId;
+  const streamCodec = streamMetaIsCurrent
+    ? status.stream_codec
+    : fallbackStreamCodec(nowTrack?.format);
+  const streamBitrate = streamMetaIsCurrent
+    ? status.stream_bitrate_kbps
+    : nowTrack?.bitrate_kbps ?? undefined;
 
   return (
     <>
@@ -379,7 +441,10 @@ export function FloatingPlayer() {
           </div>
         </div>
         <div className="fp-controls">
-          <Spectrum active={active} />
+          <div className="fp-spectrum-wrap">
+            <Spectrum active={active} />
+            <StreamBadge codec={streamCodec} bitrateKbps={streamBitrate} />
+          </div>
           <button
             type="button"
             className={`btn-icon btn-transport${trackFeedback === "like" ? " is-active" : ""}`}

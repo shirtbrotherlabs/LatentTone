@@ -3,7 +3,7 @@
 ## Continuity path
 
 1. Progressive first: `GET /api/v1/tracks/{id}/stream` for near-instant track switches.
-2. Fallback: **Hls.js** against session `hls_url` (`/api/v1/sessions/{id}/hls/index.m3u8`) when progressive fails or is unavailable (`credentials: same-origin` / `xhr.withCredentials`).
+2. Fallback: **Hls.js** against session `hls_url` (`/api/v1/sessions/{id}/hls/index.m3u8`) when progressive fails or is unavailable (`credentials: 'include'` / `xhr.withCredentials = true`).
 3. Optional **Web Audio** `GainNode` soft fade on attach when `AudioContext` + `createMediaElementSource` succeed; otherwise plain `<audio>` playback.
 
 Safari may use native HLS on `<audio>` when MSE/Hls.js is unavailable.
@@ -17,6 +17,7 @@ Per-user defaults persisted in MariaDB (`user_stream_prefs`):
 | `original` (default) | Serve file bytes when the container is browser-safe (`mp3`, `m4a`/`aac`, `flac`, `ogg`/`opus`, `wav`, …). Auto-transcode **MP3** for unsafe containers (`wma`, `ape`, …). | AAC @ bitrate |
 | `mp3` | Always FFmpeg → MP3 @ `bitrate_kbps` | MP3 @ bitrate |
 | `aac` | Always FFmpeg → AAC/ADTS @ `bitrate_kbps` | AAC @ bitrate |
+| `opus` | Always FFmpeg → Opus (Ogg) @ `bitrate_kbps` | AAC @ bitrate (HLS fallback; Opus-in-TS is poorly supported) |
 
 Default `bitrate_kbps` is **192** (clamped 64–320). Edit in Settings → Stream defaults.
 
@@ -46,6 +47,11 @@ Set `PUBLIC_BASE_URL` (or `LATENTTONE_PUBLIC_URL` / `public_base_url` in `scanne
 * Cookie `lt_session` must reach segment GETs — serve the SPA same-origin under `/app/` (default Compose).
 * Phase 3 `/dev/stream` probe is debug-only (`enable_stream_probe: false` in product config).
 * Progressive transcodes are not byte-range seekable (`Accept-Ranges: none`); seeking works for original progressive and HLS.
+* The next-track Range prefetch mainly warms original progressive files. For explicit MP3/AAC/Opus
+  transcode prefs, `/stream` is a live FFmpeg pipe, so a tiny Range request cannot produce a reusable
+  partial cache for the later `<audio>` request; reducing skip latency there needs server-side
+  pre-encoded chunks or a next-track HLS cache.
 * Wake Lock on Android Chrome needs HTTPS through the reverse proxy (`PUBLIC_BASE_URL` should be `https://…`).
 * Screen Wake Lock is unavailable on plain HTTP (non-localhost) — use HTTPS in production.
 * Progressive streams must stay **same-origin relative** (`/api/v1/tracks/{id}/stream`) so cookies reach the proxy; do not point `<audio src>` at a different absolute host than the SPA.
+* **nginx HTTP Basic Auth**: protect the site at the edge if you want, but keep the SPA, `/api/`, `/covers/`, and stream/HLS paths on the **same origin** after auth. Browsers cache Basic credentials for the origin and attach them to `<audio>` / XHR once the realm is unlocked. Prefer not to force CORS on media (`crossOrigin`) for same-origin streams — that requires `Access-Control-Allow-*` headers LatentTone does not emit, and commonly leaves the seek bar stuck (`duration` unknown) even when sound plays. Catalog `duration_ms` is used as a fallback when the media element has no duration (typical for live FFmpeg progressive pipes).

@@ -2,7 +2,7 @@
  * Copyright (C) 2026 martinsah
  * SPDX-License-Identifier: GPL-3.0-only
  * Author: martinsah
- * Date: 2026-07-15
+ * Date: 2026-07-16
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -20,7 +20,7 @@ export function TrackActions({ track }: Props) {
   const [msg, setMsg] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
-  const { playNext, startRadio, feedback, status } = usePlayer();
+  const { playNext, startRadio } = usePlayer();
 
   useEffect(() => {
     if (!open) return;
@@ -48,34 +48,22 @@ export function TrackActions({ track }: Props) {
         type="button"
         className="menu-btn"
         aria-label="Track actions"
+        aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
         ⋯
       </button>
       {open ? (
         <div className="menu" role="menu">
-          <button type="button" onClick={() => void run(() => playNext(track.id), "Queued")}>
+          <button type="button" role="menuitem" onClick={() => void run(() => playNext(track.id), "Queued next")}>
             Play next
           </button>
-          <button
-            type="button"
-            disabled={!status || status.status === "stopped"}
-            onClick={() => void run(() => feedback("like"), "Liked")}
-          >
-            Thumbs up
-          </button>
-          <button
-            type="button"
-            disabled={!status || status.status === "stopped"}
-            onClick={() => void run(() => feedback("dislike"), "Noted")}
-          >
-            Thumbs down
-          </button>
-          <button type="button" onClick={() => navigate(`/library/tracks/${track.id}`)}>
+          <button type="button" role="menuitem" onClick={() => navigate(`/library/tracks/${track.id}`)}>
             More info
           </button>
           <button
             type="button"
+            role="menuitem"
             onClick={() =>
               void run(async () => {
                 const pl = await api.createPlaylist(`${track.title} mix`);
@@ -88,6 +76,7 @@ export function TrackActions({ track }: Props) {
           </button>
           <button
             type="button"
+            role="menuitem"
             onClick={() => void run(() => startRadio(track.id), "Radio started")}
           >
             Create radio station from track

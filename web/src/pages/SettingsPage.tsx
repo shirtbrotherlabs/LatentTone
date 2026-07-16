@@ -2,7 +2,7 @@
  * Copyright (C) 2026 martinsah
  * SPDX-License-Identifier: GPL-3.0-only
  * Author: martinsah
- * Date: 2026-07-15
+ * Date: 2026-07-16
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -45,9 +45,10 @@ const RADIO_TOGGLES: { key: RadioToggleKey; label: string; hint: string }[] = [
 ];
 
 const STREAM_FORMATS: { value: StreamPrefs["stream_format"]; label: string }[] = [
-  { value: "original", label: "Original (no transcode when browser-safe)" },
+  { value: "original", label: "Original" },
   { value: "mp3", label: "MP3" },
   { value: "aac", label: "AAC" },
+  { value: "opus", label: "Opus" },
 ];
 
 export function SettingsPage() {
@@ -292,11 +293,12 @@ export function SettingsPage() {
           </form>
         </div>
 
-        <div className="tile">
+        <div className="tile settings-stream-tile">
           <h3>Stream defaults</h3>
           <p className="muted">
             Progressive and HLS encode target. Default is original (no transcode) when the
-            format is browser-safe; unsafe containers auto-fall back to MP3.
+            format is browser-safe; unsafe containers auto-fall back to MP3. Opus progressive
+            uses Ogg/Opus; HLS fallback stays AAC.
           </p>
           {stream ? (
             <div className="settings-stream">

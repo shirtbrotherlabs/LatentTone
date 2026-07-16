@@ -172,8 +172,22 @@ func TestInjectQueuePinsNext(t *testing.T) {
 	if status.Queue[0].Source != "user_pin" {
 		t.Fatalf("want user_pin source, got %q", status.Queue[0].Source)
 	}
-	if err := w.InjectQueue(ctx, live, id3, "next"); !session.IsQueueConflict(err) {
-		t.Fatalf("want conflict, got %v", err)
+	// Already queued: Play next moves it to the front (no conflict).
+	if err := w.InjectQueue(ctx, live, id2, "next"); err != nil {
+		t.Fatal(err)
+	}
+	status = w.ToStatus(live)
+	if len(status.Queue) == 0 || status.Queue[0].TrackID != id2 {
+		t.Fatalf("want id2 promoted to front, got %#v", status.Queue)
+	}
+	if err := w.RemoveFromQueue(ctx, live, id2); err != nil {
+		t.Fatal(err)
+	}
+	status = w.ToStatus(live)
+	for _, q := range status.Queue {
+		if q.TrackID == id2 {
+			t.Fatalf("id2 should be removed from queue: %#v", status.Queue)
+		}
 	}
 }
 

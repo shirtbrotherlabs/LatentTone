@@ -38,6 +38,13 @@ export type SessionStatus = {
   hls_url: string;
   progressive_url: string;
   can_go_back?: boolean;
+  /** Progressive delivery codec for now-playing (flac, mp3, aac, opus, …). */
+  stream_track_id?: number;
+  stream_codec?: string;
+  /** Progressive bitrate in kbps; omitted/0 when unknown. */
+  stream_bitrate_kbps?: number;
+  /** True when progressive delivery is an FFmpeg encode instead of original bytes. */
+  stream_transcoding?: boolean;
 };
 
 export type CatalogTrack = {
@@ -50,6 +57,7 @@ export type CatalogTrack = {
   track_number?: number | null;
   disc_number?: number | null;
   duration_ms?: number | null;
+  bitrate_kbps?: number | null;
   format?: string | null;
   year?: number | null;
   genres?: string;
@@ -186,7 +194,7 @@ export type RadioPrefsPatch = Partial<
 /** Per-user progressive/HLS encode defaults. */
 export type StreamPrefs = {
   user_id: number;
-  stream_format: "original" | "mp3" | "aac" | string;
+  stream_format: "original" | "mp3" | "aac" | "opus" | string;
   bitrate_kbps: number;
   updated_at?: string;
 };

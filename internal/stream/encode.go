@@ -16,20 +16,108 @@ import (
 
 // EncodeOpts controls progressive/HLS audio encode targets.
 type EncodeOpts struct {
-	// Format is original | mp3 | aac (empty treated as original).
+	// Format is original | mp3 | aac | opus (empty treated as original).
 	Format string
 	// BitrateKbps target for lossy encodes (default 192).
 	BitrateKbps int
+}
+
+// EffectiveStream describes what progressive delivery will serve for a track.
+type EffectiveStream struct {
+	// Codec is a short label: flac, mp3, aac, opus, wav, ogg, …
+	Codec string
+	// BitrateKbps is the encode target or catalog bitrate; 0 when unknown.
+	BitrateKbps int
+	// Transcoding is true when FFmpeg re-encodes instead of serving the file.
+	Transcoding bool
 }
 
 // NeedsTranscode reports whether progressive delivery should run FFmpeg
 // instead of serving the original file bytes.
 func NeedsTranscode(relPath, catalogFormat string, opts EncodeOpts) bool {
 	format := strings.ToLower(strings.TrimSpace(opts.Format))
-	if format == "mp3" || format == "aac" {
+	if format == "mp3" || format == "aac" || format == "opus" {
 		return true
 	}
 	return !browserSafeContainer(relPath, catalogFormat)
+}
+
+func bitrateOrDefault(kbps int) int {
+	if kbps <= 0 {
+		return 192
+	}
+	return kbps
+}
+
+// DisplayCodec normalizes a path extension / catalog format hint to a short codec label.
+func DisplayCodec(relPath, catalogFormat string) string {
+	ext := strings.ToLower(filepath.Ext(relPath))
+	fmtHint := strings.ToLower(strings.TrimSpace(catalogFormat))
+	switch ext {
+	case ".mp3":
+		return "mp3"
+	case ".flac":
+		return "flac"
+	case ".opus":
+		return "opus"
+	case ".ogg":
+		if fmtHint == "opus" {
+			return "opus"
+		}
+		return "ogg"
+	case ".m4a", ".aac", ".mp4":
+		return "aac"
+	case ".wav", ".wave":
+		return "wav"
+	case ".webm":
+		return "webm"
+	}
+	switch fmtHint {
+	case "mp3", "mpeg":
+		return "mp3"
+	case "flac":
+		return "flac"
+	case "opus":
+		return "opus"
+	case "ogg", "vorbis":
+		return "ogg"
+	case "m4a", "aac", "mp4":
+		return "aac"
+	case "wav", "wave":
+		return "wav"
+	case "webm":
+		return "webm"
+	}
+	if fmtHint != "" {
+		return fmtHint
+	}
+	if ext != "" {
+		return strings.TrimPrefix(ext, ".")
+	}
+	return "audio"
+}
+
+// ResolveEffectiveStream reports the codec/bitrate the progressive URL will deliver.
+func ResolveEffectiveStream(relPath, catalogFormat string, catalogBitrateKbps int, opts EncodeOpts) EffectiveStream {
+	if NeedsTranscode(relPath, catalogFormat, opts) {
+		br := bitrateOrDefault(opts.BitrateKbps)
+		switch strings.ToLower(strings.TrimSpace(opts.Format)) {
+		case "aac":
+			return EffectiveStream{Codec: "aac", BitrateKbps: br, Transcoding: true}
+		case "opus":
+			return EffectiveStream{Codec: "opus", BitrateKbps: br, Transcoding: true}
+		case "mp3":
+			return EffectiveStream{Codec: "mp3", BitrateKbps: br, Transcoding: true}
+		default:
+			// Unsafe original → auto MP3 fallback.
+			return EffectiveStream{Codec: "mp3", BitrateKbps: br, Transcoding: true}
+		}
+	}
+	return EffectiveStream{
+		Codec:       DisplayCodec(relPath, catalogFormat),
+		BitrateKbps: catalogBitrateKbps,
+		Transcoding: false,
+	}
 }
 
 // browserSafeContainer is true for formats most Chromium/Firefox/Safari builds
@@ -56,14 +144,13 @@ func browserSafeContainer(relPath, catalogFormat string) bool {
 // ResolveEncodeTarget picks the FFmpeg output codec/container for progressive
 // streaming when NeedsTranscode is true.
 func ResolveEncodeTarget(opts EncodeOpts) (codec, format, contentType, bitrate string) {
-	kbps := opts.BitrateKbps
-	if kbps <= 0 {
-		kbps = 192
-	}
-	bitrate = fmt.Sprintf("%dk", kbps)
+	bitrate = fmt.Sprintf("%dk", bitrateOrDefault(opts.BitrateKbps))
 	switch strings.ToLower(strings.TrimSpace(opts.Format)) {
 	case "aac":
 		return "aac", "adts", "audio/aac", bitrate
+	case "opus":
+		// Ogg/Opus is widely supported by Chromium/Firefox progressive <audio>.
+		return "libopus", "ogg", "audio/ogg", bitrate
 	default:
 		// mp3 (explicit) or auto-fallback for unsafe originals
 		return "libmp3lame", "mp3", "audio/mpeg", bitrate
@@ -72,15 +159,15 @@ func ResolveEncodeTarget(opts EncodeOpts) (codec, format, contentType, bitrate s
 
 // HLSAudioArgs returns FFmpeg audio encode args for session HLS packaging.
 func HLSAudioArgs(opts EncodeOpts) []string {
-	kbps := opts.BitrateKbps
-	if kbps <= 0 {
-		kbps = 192
-	}
-	bitrate := fmt.Sprintf("%dk", kbps)
+	bitrate := fmt.Sprintf("%dk", bitrateOrDefault(opts.BitrateKbps))
 	switch strings.ToLower(strings.TrimSpace(opts.Format)) {
 	case "mp3":
 		// HLS with MP3 audio in MPEG-TS is widely supported.
 		return []string{"-c:a", "libmp3lame", "-b:a", bitrate}
+	case "opus":
+		// Opus-in-MPEG-TS is poorly supported by hls.js/Safari; keep AAC for HLS
+		// fallback while progressive serves Opus.
+		return []string{"-c:a", "aac", "-b:a", bitrate}
 	default:
 		// original preference and aac both use AAC in HLS (browser-safe).
 		return []string{"-c:a", "aac", "-b:a", bitrate}

@@ -83,6 +83,8 @@ type PlayerState = {
   /** Previous track in session history, or restart current from 0. */
   goBack: () => Promise<void>;
   playNext: (trackId: number) => Promise<void>;
+  /** Drop a track from the Up next queue (does not stop the station). */
+  removeFromQueue: (trackId: number) => Promise<void>;
   refreshMeta: (trackId: number) => Promise<CatalogTrack | null>;
   setVolume: (v: number) => void;
   toggleMute: () => void;
@@ -730,10 +732,24 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         await startRadio(trackId);
         return;
       }
+      setError(null);
       const s = await api.injectQueue(id, trackId, "next");
       setStatus(s);
     },
     [status?.id, status?.status, startRadio],
+  );
+
+  const removeFromQueue = useCallback(
+    async (trackId: number) => {
+      const id = sessionIdRef.current || status?.id;
+      if (!id || status?.status === "stopped") {
+        throw new Error("no active session");
+      }
+      setError(null);
+      const s = await api.removeFromQueue(id, trackId);
+      setStatus(s);
+    },
+    [status?.id, status?.status],
   );
 
   const nextTrack = queueTracks[0] ?? null;
@@ -848,6 +864,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       feedback,
       goBack,
       playNext,
+      removeFromQueue,
       refreshMeta,
       setVolume,
       toggleMute,
@@ -877,6 +894,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       feedback,
       goBack,
       playNext,
+      removeFromQueue,
       refreshMeta,
       setVolume,
       toggleMute,

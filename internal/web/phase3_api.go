@@ -181,6 +181,13 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if parts[1] == "queue" && r.Method == http.MethodDelete {
+		auth.RequireUser(func(w http.ResponseWriter, r *http.Request) {
+			s.deleteQueueTrack(w, r, sessionID)
+		})(w, r)
+		return
+	}
+
 	if parts[1] == "back" && r.Method == http.MethodPost {
 		auth.RequireUser(func(w http.ResponseWriter, r *http.Request) {
 			s.postSessionBack(w, r, sessionID)
@@ -356,6 +363,40 @@ func (s *Server) postQueueInject(w http.ResponseWriter, r *http.Request, session
 			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 			return
 		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.Sessions.ToStatus(live))
+}
+
+type queueRemoveBody struct {
+	TrackID int64 `json:"track_id"`
+}
+
+func (s *Server) deleteQueueTrack(w http.ResponseWriter, r *http.Request, sessionID string) {
+	u := auth.UserFrom(r.Context())
+	live, err := s.Sessions.Get(sessionID, u.ID)
+	if err != nil {
+		if err.Error() == "forbidden" {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if live == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	var body queueRemoveBody
+	if !decodeJSONBody(w, r, &body) {
+		return
+	}
+	if body.TrackID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "track_id required"})
+		return
+	}
+	if err := s.Sessions.RemoveFromQueue(r.Context(), live, body.TrackID); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}

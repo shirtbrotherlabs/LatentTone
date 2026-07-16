@@ -41,7 +41,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     ...init,
     headers,
     // Session is HttpOnly cookie `lt_session` — never store tokens in JS.
-    credentials: "same-origin",
+    // Always send cookies (same-origin and cross-path) with the request.
+    credentials: "include",
   });
   const text = await res.text();
   let data: unknown = null;
@@ -137,6 +138,12 @@ export const api = {
     return request<SessionStatus>(`/api/v1/sessions/${id}/queue`, {
       method: "POST",
       body: JSON.stringify({ track_id: trackId, position }),
+    });
+  },
+  removeFromQueue(id: string, trackId: number) {
+    return request<SessionStatus>(`/api/v1/sessions/${id}/queue`, {
+      method: "DELETE",
+      body: JSON.stringify({ track_id: trackId }),
     });
   },
   /** Restore previous track from session history. 409 = no history (client restarts from 0). */

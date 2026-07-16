@@ -47,6 +47,8 @@ Compose passes this into the `browse` container. The Go server also accepts `LAT
 
 When `public_base_url` is `https://…`, session cookies are marked **Secure** (browsers only send them over HTTPS). For plain-HTTP local access to `:8080`, set `SECURE_COOKIE=false` (or `LATENTTONE_SECURE_COOKIE=false`). TLS/HSTS belong on the reverse proxy; the app sets `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, and CSP on responses.
 
+If the reverse proxy also uses **HTTP Basic Auth**, keep `/app/`, `/api/`, `/covers/`, and media under the same authenticated origin (do not split hosts). After the browser unlocks the realm, Basic credentials are reused for `<audio>` and API calls alongside the app’s `lt_session` cookie. See `docs/PLAYER.md` for seek-bar / duration notes behind proxies.
+
 ```bash
 # One-shot catalog scan
 docker compose --profile scan run --rm scan

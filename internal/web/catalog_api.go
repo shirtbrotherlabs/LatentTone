@@ -244,13 +244,14 @@ func trackJSON(t *db.Track) map[string]any {
 		return nil
 	}
 	m := map[string]any{
-		"id":          t.ID,
-		"title":       t.Title,
-		"artist":      t.ArtistName,
-		"album":       t.AlbumTitle,
+		"id":           t.ID,
+		"title":        t.Title,
+		"artist":       t.ArtistName,
+		"album":        t.AlbumTitle,
 		"track_number": nullIntJSON(t.TrackNumber),
 		"disc_number":  nullIntJSON(t.DiscNumber),
 		"duration_ms":  nullIntJSON(t.DurationMS),
+		"bitrate_kbps": nullIntJSON(t.BitrateKbps),
 		"format":       nullStrJSON(t.Format),
 		"year":         nullIntJSON(t.Year),
 		"genres":       t.Genres,

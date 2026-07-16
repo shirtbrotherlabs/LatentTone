@@ -52,9 +52,11 @@ export class AudioEngine {
   constructor() {
     this.audio = new Audio();
     this.audio.preload = "auto";
-    // Same-origin relative stream paths; credentials cookie for auth. Avoid absolute
-    // cross-origin URLs (reverse-proxy mismatch → opaque "couldn't fetch" on Android).
-    this.audio.crossOrigin = "use-credentials";
+    // Do not set crossOrigin for same-origin relative streams. Forcing
+    // "use-credentials" turns the load into a CORS request; without ACAO headers
+    // (typical behind nginx Basic Auth / same-origin cookie apps) browsers often
+    // withhold duration/metadata and break the seek bar even when audio plays.
+    // Same-origin MediaElementSource still works for the spectrum analyser.
     this.audio.volume = this.volume;
     this.audio.addEventListener("play", () => this.playStateHandler?.(true));
     this.audio.addEventListener("pause", () => this.playStateHandler?.(false));
@@ -380,6 +382,9 @@ export class AudioEngine {
     // Keep stream paths same-origin relative so reverse proxies need no host rewrite.
     const progressiveUrl = toSameOriginPath(opts.progressiveUrl);
     const hlsUrl = toSameOriginPath(opts.hlsUrl);
+    // Relative / same-origin: leave CORS mode off so cookies + browser Basic Auth
+    // credentials apply as a normal media request (duration/metadata available).
+    this.audio.removeAttribute("crossorigin");
     const primary =
       preferProgressive && progressiveUrl
         ? progressiveUrl

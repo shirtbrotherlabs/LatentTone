@@ -59,6 +59,7 @@ export function ListenPage() {
     error,
     stop,
     trackFeedback,
+    removeFromQueue,
   } = usePlayer();
   const [seed, setSeed] = useState("");
   const [suggestions, setSuggestions] = useState<CatalogTrack[]>([]);
@@ -221,6 +222,22 @@ export function ListenPage() {
               <TrackTable
                 tracks={queueTracks.map(asTableRow)}
                 rowClassName={() => "track-table-row-next"}
+                renderTrailing={(t) => (
+                  <button
+                    type="button"
+                    className="queue-remove-btn"
+                    aria-label={`Remove ${t.title} from up next`}
+                    title="Remove from up next"
+                    onClick={() => {
+                      setLocalError(null);
+                      void removeFromQueue(t.id).catch((err) => {
+                        setLocalError(err instanceof Error ? err.message : "failed");
+                      });
+                    }}
+                  >
+                    ×
+                  </button>
+                )}
               />
             )}
           </div>

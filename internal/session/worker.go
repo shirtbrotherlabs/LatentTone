@@ -18,6 +18,7 @@ import (
 	"github.com/shirtbrotherlabs/LatentTone/internal/auth"
 	"github.com/shirtbrotherlabs/LatentTone/internal/db"
 	"github.com/shirtbrotherlabs/LatentTone/internal/lance"
+	"github.com/shirtbrotherlabs/LatentTone/internal/stream"
 )
 
 // NeighborFn selects similar tracks for the seed (injectable for tests).
@@ -59,18 +60,23 @@ type FeedbackAck struct {
 
 // StatusDTO is the short-poll JSON shape.
 type StatusDTO struct {
-	ID              string       `json:"id"`
-	UserID          int64        `json:"user_id"`
-	Status          string       `json:"status"`
-	SeedTrackID     int64        `json:"seed_track_id"`
-	NowPlaying      *TrackRef    `json:"now_playing"`
+	ID          string    `json:"id"`
+	UserID      int64     `json:"user_id"`
+	Status      string    `json:"status"`
+	SeedTrackID int64     `json:"seed_track_id"`
+	NowPlaying  *TrackRef `json:"now_playing"`
 	// History is recently played/skipped tracks (oldest → newest), capped for SPA.
-	History         []TrackRef   `json:"history,omitempty"`
-	Queue           []TrackRef   `json:"queue"`
-	LastFeedback    *FeedbackAck `json:"last_feedback,omitempty"`
-	HLSURL          string       `json:"hls_url"`
-	ProgressiveURL  string       `json:"progressive_url"`
-	CanGoBack       bool         `json:"can_go_back"`
+	History        []TrackRef   `json:"history,omitempty"`
+	Queue          []TrackRef   `json:"queue"`
+	LastFeedback   *FeedbackAck `json:"last_feedback,omitempty"`
+	HLSURL         string       `json:"hls_url"`
+	ProgressiveURL string       `json:"progressive_url"`
+	CanGoBack      bool         `json:"can_go_back"`
+	// StreamCodec / StreamBitrateKbps describe progressive delivery for now-playing.
+	StreamTrackID     int64  `json:"stream_track_id,omitempty"`
+	StreamCodec       string `json:"stream_codec,omitempty"`
+	StreamBitrateKbps int    `json:"stream_bitrate_kbps,omitempty"`
+	StreamTranscoding bool   `json:"stream_transcoding,omitempty"`
 }
 
 // maxHistoryExposed is how many past tracks appear on session status for Now Playing.
@@ -80,7 +86,7 @@ const maxHistoryExposed = 8
 type TrackRef struct {
 	TrackID   int64   `json:"track_id"`
 	Score     float64 `json:"score,omitempty"`
-	Source    string  `json:"source,omitempty"` // "user_pin" when manually injected
+	Source    string  `json:"source,omitempty"`     // "user_pin" when manually injected
 	Feedback  string  `json:"feedback,omitempty"`   // latest like|dislike for this user
 	PlayCount int64   `json:"play_count,omitempty"` // global playback_events count
 }
@@ -669,7 +675,9 @@ func (w *Worker) Back(ctx context.Context, live *Live) error {
 }
 
 // InjectQueue pins a track into the upcoming queue (ADR-007 V5b).
-// position is "next" (front of pins) or "end" (after existing pins).
+// position is "next" (front of queue) or "end" (after existing pins).
+// If the track is already queued, it is moved to the requested position
+// instead of returning a conflict (so "Play next" from Up next works).
 func (w *Worker) InjectQueue(ctx context.Context, live *Live, trackID int64, position string) error {
 	live.mu.Lock()
 	defer live.mu.Unlock()
@@ -694,7 +702,7 @@ func (w *Worker) InjectQueue(ctx context.Context, live *Live, trackID int64, pos
 	if t == nil || t.MissingAt.Valid {
 		return fmt.Errorf("track not found")
 	}
-	if trackID == live.NowPlayingID || contains(live.Queue, trackID) {
+	if trackID == live.NowPlayingID {
 		return errQueueConflict
 	}
 	skips, err := w.DB.ListSkippedTrackIDs(live.UserID, live.ID)
@@ -705,6 +713,7 @@ func (w *Worker) InjectQueue(ctx context.Context, live *Live, trackID int64, pos
 		return fmt.Errorf("track is skipped or banned")
 	}
 	w.ensurePinned(live)
+	live.Queue = filterOut(live.Queue, trackID)
 	pins, auto := w.splitQueue(live)
 	if position == "next" {
 		pins = append([]int64{trackID}, pins...)
@@ -718,10 +727,33 @@ func (w *Worker) InjectQueue(ctx context.Context, live *Live, trackID int64, pos
 	return w.persist(live, "")
 }
 
-// errQueueConflict is returned when the track is already queued or playing.
-var errQueueConflict = fmt.Errorf("track already in queue")
+// RemoveFromQueue drops a track from the upcoming queue, session-skips it so
+// affinity refill will not immediately re-add it, then tops up the queue.
+func (w *Worker) RemoveFromQueue(ctx context.Context, live *Live, trackID int64) error {
+	live.mu.Lock()
+	defer live.mu.Unlock()
+	if trackID <= 0 {
+		return fmt.Errorf("track_id required")
+	}
+	if live.Status == db.SessionStatusStopped {
+		return fmt.Errorf("session stopped")
+	}
+	if !contains(live.Queue, trackID) {
+		return fmt.Errorf("track not in queue")
+	}
+	w.ensurePinned(live)
+	live.Queue = filterOut(live.Queue, trackID)
+	delete(live.Pinned, trackID)
+	delete(live.Sources, trackID)
+	_ = w.DB.AddSkip(live.UserID, trackID, db.SkipScopeSession, live.ID)
+	_ = w.fillQueue(ctx, live)
+	return w.persist(live, "")
+}
 
-// IsQueueConflict reports whether err is a duplicate inject.
+// errQueueConflict is returned when the track is already playing (cannot re-queue as next).
+var errQueueConflict = fmt.Errorf("track is now playing")
+
+// IsQueueConflict reports whether err is a now-playing inject conflict.
 func IsQueueConflict(err error) bool {
 	return err == errQueueConflict
 }
@@ -774,9 +806,42 @@ func (w *Worker) ToStatus(live *Live) StatusDTO {
 		ack := live.LastFeedback
 		dto.LastFeedback = &ack
 	}
+	nowID := live.NowPlayingID
 	live.mu.Unlock()
 	w.enrichTrackRefs(userID, &dto)
+	w.enrichStreamInfo(userID, nowID, &dto)
 	return dto
+}
+
+// enrichStreamInfo attaches progressive codec/bitrate for the floating player badge.
+func (w *Worker) enrichStreamInfo(userID, nowPlayingID int64, dto *StatusDTO) {
+	if dto == nil || nowPlayingID <= 0 {
+		return
+	}
+	t, err := w.DB.GetTrack(nowPlayingID)
+	if err != nil || t == nil {
+		return
+	}
+	prefs := db.DefaultStreamPrefs(userID)
+	if p, err := w.DB.GetStreamPrefs(userID); err == nil {
+		prefs = p
+	}
+	catalogFmt := ""
+	if t.Format.Valid {
+		catalogFmt = t.Format.String
+	}
+	catalogBr := 0
+	if t.BitrateKbps.Valid && t.BitrateKbps.Int64 > 0 {
+		catalogBr = int(t.BitrateKbps.Int64)
+	}
+	info := stream.ResolveEffectiveStream(t.Path, catalogFmt, catalogBr, stream.EncodeOpts{
+		Format:      prefs.StreamFormat,
+		BitrateKbps: prefs.BitrateKbps,
+	})
+	dto.StreamTrackID = nowPlayingID
+	dto.StreamCodec = info.Codec
+	dto.StreamBitrateKbps = info.BitrateKbps
+	dto.StreamTranscoding = info.Transcoding
 }
 
 // enrichTrackRefs attaches per-user like/dislike and play counts for SPA chrome.

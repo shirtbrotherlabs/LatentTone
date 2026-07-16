@@ -14,6 +14,7 @@ const (
 	StreamFormatOriginal = "original"
 	StreamFormatMP3      = "mp3"
 	StreamFormatAAC      = "aac"
+	StreamFormatOpus     = "opus"
 
 	DefaultStreamBitrateKbps = 192
 )
@@ -39,7 +40,7 @@ func DefaultStreamPrefs(userID int64) StreamPrefs {
 // NormalizeStreamFormat returns a known format or empty when invalid.
 func NormalizeStreamFormat(s string) string {
 	switch strings.ToLower(strings.TrimSpace(s)) {
-	case StreamFormatOriginal, StreamFormatMP3, StreamFormatAAC:
+	case StreamFormatOriginal, StreamFormatMP3, StreamFormatAAC, StreamFormatOpus:
 		return strings.ToLower(strings.TrimSpace(s))
 	default:
 		return ""

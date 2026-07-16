@@ -328,11 +328,12 @@ paths:
   /api/v1/sessions/{id}/queue:
     post:
       tags: [sessions]
-      summary: Inject track into upcoming queue (play next)
+      summary: Inject or move track in upcoming queue (play next)
       description: |
         Phase 3 V5b / ADR-007. Pins `track_id` at `position` `next` (default) or `end`.
-        Duplicates return 409. Response is the updated session status (`queue[].source`
-        is `user_pin` for pinned entries).
+        If the track is already in the queue, it is moved to that position (not 409).
+        Injecting the currently playing track returns 409. Response is the updated
+        session status (`queue[].source` is `user_pin` for pinned entries).
       operationId: postQueueInject
       security:
         - bearerAuth: []
@@ -373,6 +374,47 @@ paths:
         '404':
           $ref: '#/components/responses/Error'
         '409':
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [sessions]
+      summary: Remove track from upcoming queue
+      description: |
+        Drops `track_id` from the session queue and tops up affinity prefetch.
+        The track is session-skipped so it will not be immediately re-queued.
+        Does not affect the currently playing track.
+      operationId: deleteQueueTrack
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SessionID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [track_id]
+              properties:
+                track_id:
+                  type: integer
+                  format: int64
+            example:
+              track_id: 418
+      responses:
+        '200':
+          description: Updated session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionStatus'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
           $ref: '#/components/responses/Error'
 
   /api/v1/sessions/{id}/back:
@@ -1230,7 +1272,7 @@ components:
           format: int64
         stream_format:
           type: string
-          enum: [original, mp3, aac]
+          enum: [original, mp3, aac, opus]
         bitrate_kbps:
           type: integer
           minimum: 64
@@ -1245,7 +1287,7 @@ components:
       properties:
         stream_format:
           type: string
-          enum: [original, mp3, aac]
+          enum: [original, mp3, aac, opus]
         bitrate_kbps:
           type: integer
           minimum: 64
@@ -1382,6 +1424,21 @@ components:
         can_go_back:
           type: boolean
           description: True when session history has at least one previous track
+        stream_codec:
+          type: string
+          description: Progressive delivery codec for now-playing (flac, mp3, aac, opus, …)
+          example: flac
+        stream_track_id:
+          type: integer
+          format: int64
+          description: Track id the stream metadata describes
+        stream_bitrate_kbps:
+          type: integer
+          description: Progressive bitrate in kbps (encode target or catalog); omitted/0 when unknown
+          example: 192
+        stream_transcoding:
+          type: boolean
+          description: True when progressive delivery is an FFmpeg encode instead of original bytes
 
     FeedbackRequest:
       type: object

@@ -57,7 +57,7 @@ func (s *Server) patchStreamPrefs(w http.ResponseWriter, r *http.Request, userID
 		norm := db.NormalizeStreamFormat(*body.StreamFormat)
 		if norm == "" {
 			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "stream_format must be original, mp3, or aac",
+				"error": "stream_format must be original, mp3, aac, or opus",
 			})
 			return
 		}
