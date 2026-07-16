@@ -1,6 +1,8 @@
 # LatentTone library scanner configuration
 library_root: /music
-database_path: /data/latenttone.db
+# MariaDB DSN (github.com/go-sql-driver/mysql format). Overridden by
+# DATABASE_DSN / LATENTTONE_DATABASE_DSN env (see docker-compose.yml).
+database_dsn: "latenttone:latenttone@tcp(mariadb:3306)/latenttone?parseTime=true&charset=utf8mb4&collation=utf8mb4_unicode_ci"
 
 # Audio file extensions (lowercase, without dot)
 extensions:
@@ -54,7 +56,9 @@ public_base_url: https://latent.lt.lkeng.org
 # Phase 3 — auth & streaming (ADR-005 / ADR-006)
 auth_mode: authenticated          # authenticated | open (solo-dev escape hatch)
 session_ttl: 168h
-secure_cookie: false
+# secure_cookie: omit to infer from public_base_url (https → Secure cookies).
+# Override with secure_cookie: false for plain-HTTP local, or SECURE_COOKIE /
+# LATENTTONE_SECURE_COOKIE env (true/false).
 enable_stream_probe: false        # Gate C1: /dev/stream (debug only; product SPA is /app/)
 enable_api_docs: false            # Phase 3B: /api/docs Swagger UI
 hls_root: /data/hls

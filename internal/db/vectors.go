@@ -109,8 +109,8 @@ func (d *DB) ClaimVectorWork(limit int, sampleMode string, seed int64) ([]int64,
 	}
 	order := "t.id ASC"
 	if strings.EqualFold(sampleMode, "random") {
-		// SQLite RANDOM() is fine; seed is advisory (documented in metadata.yaml).
-		order = "RANDOM()"
+		// MariaDB RAND() is fine; seed is advisory (documented in metadata.yaml).
+		order = "RAND()"
 		_ = seed
 	}
 	q := fmt.Sprintf(`
@@ -155,21 +155,22 @@ func (d *DB) SaveTrackFeatures(trackID int64, extractor, modelVersion, featuresJ
 	_, err := d.SQL.Exec(`
 INSERT INTO track_features (track_id, extractor, model_version, features_json, vector_dim, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(track_id, extractor) DO UPDATE SET
-  model_version = excluded.model_version,
-  features_json = excluded.features_json,
-  vector_dim = excluded.vector_dim,
-  updated_at = excluded.updated_at`,
+ON DUPLICATE KEY UPDATE
+  model_version = VALUES(model_version),
+  features_json = VALUES(features_json),
+  vector_dim = VALUES(vector_dim),
+  updated_at = VALUES(updated_at)`,
 		trackID, extractor, modelVersion, featuresJSON, dim, now, now)
 	return err
 }
 
 // MarkVectorReady stores compiled embedding and marks ready.
-// lanceID may be empty (SQLite-only) or a LanceDB row/path identifier.
+// lanceID may be empty (no LanceDB store configured — embedding lives only
+// in the catalog's embedding_blob column) or a LanceDB row/path identifier.
 func (d *DB) MarkVectorReady(trackID int64, extractorSet, modelVersions string, vec []float32, audioMtime int64, lanceID string) error {
 	now := Now()
 	if lanceID == "" {
-		lanceID = fmt.Sprintf("sqlite:%d", trackID)
+		lanceID = fmt.Sprintf("catalog:%d", trackID)
 	}
 	blob := Float32SliceToBytes(vec)
 	_, err := d.SQL.Exec(`
@@ -340,7 +341,7 @@ func (d *DB) VectorStatusCounts() (ready, pending, processing, errorN, stale, ca
 // BeginEmbedRun records an embed job.
 func (d *DB) BeginEmbedRun(trigger, sampleMode string, maxTracks int) (int64, error) {
 	res, err := d.SQL.Exec(`
-INSERT INTO embed_runs (started_at, trigger, sample_mode, max_tracks, status)
+INSERT INTO embed_runs (started_at, `+"`trigger`"+`, sample_mode, max_tracks, status)
 VALUES (?, ?, ?, ?, 'running')`, Now(), trigger, sampleMode, maxTracks)
 	if err != nil {
 		return 0, err
@@ -379,7 +380,7 @@ func (d *DB) GetTrackEmbedBrief(trackID int64) (*TrackEmbedBrief, error) {
 	row := d.SQL.QueryRow(`
 SELECT t.id, t.path, COALESCE(t.file_mtime,0), COALESCE(t.file_size,0), t.title, COALESCE(t.format,''),
        t.duration_ms, t.bitrate_kbps, t.sample_rate_hz, t.channels, COALESCE(t.year, al.year),
-       COALESCE((SELECT GROUP_CONCAT(g.name, '|') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id), ''),
+       COALESCE((SELECT GROUP_CONCAT(g.name SEPARATOR '|') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id), ''),
        COALESCE(al.title, ''), COALESCE(a.name, '')
 FROM tracks t
 LEFT JOIN albums al ON al.id = t.album_id

@@ -56,7 +56,8 @@ func Similarity(catalog *db.DB, aID, bID int64) (float64, error) {
 }
 
 // Neighbors returns top-k cosine neighbors for trackID (excludes self).
-// When store is enabled, LanceDB ANN is tried first; falls back to flat SQLite cosine.
+// When store is enabled, LanceDB ANN is tried first; falls back to a flat
+// in-process cosine scan over catalog-stored embeddings.
 func Neighbors(catalog *db.DB, trackID int64, k int) ([]Neighbor, error) {
 	return NeighborsWithStore(context.Background(), catalog, nil, trackID, k)
 }
@@ -95,7 +96,7 @@ func NeighborsByVector(ctx context.Context, catalog *db.DB, store *lance.Store, 
 			}
 			return out, nil
 		}
-		// fall through to SQLite on empty / error
+		// fall through to the flat catalog scan on empty / error
 	}
 
 	all, err := catalog.ListReadyEmbeddings()

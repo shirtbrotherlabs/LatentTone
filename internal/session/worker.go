@@ -41,7 +41,7 @@ type Live struct {
 	History      []int64
 	LastFeedback FeedbackAck
 
-	// Radio diversification state (in-memory; resets if process reloads session from SQLite).
+	// Radio diversification state (in-memory; resets if process reloads session from the catalog DB).
 	ArtistPenalties   map[string]float64
 	TracksSinceBridge int
 	BridgeInterval    int

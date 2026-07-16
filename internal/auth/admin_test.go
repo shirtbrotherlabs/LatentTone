@@ -15,18 +15,14 @@ import (
 
 	"github.com/shirtbrotherlabs/LatentTone/internal/auth"
 	"github.com/shirtbrotherlabs/LatentTone/internal/config"
-	"github.com/shirtbrotherlabs/LatentTone/internal/db"
+	"github.com/shirtbrotherlabs/LatentTone/internal/dbtest"
 	"github.com/shirtbrotherlabs/LatentTone/internal/meta"
 	"github.com/shirtbrotherlabs/LatentTone/internal/web"
 )
 
 func TestBootstrapAdminAndOpsACL(t *testing.T) {
 	dir := t.TempDir()
-	catalog, err := db.Open(filepath.Join(dir, "t.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer catalog.Close()
+	catalog, dsn := dbtest.Open(t)
 
 	if err := auth.BootstrapAdmin(catalog, "admin", "adminpass1"); err != nil {
 		t.Fatal(err)
@@ -45,13 +41,13 @@ func TestBootstrapAdminAndOpsACL(t *testing.T) {
 	}
 
 	cfg := &config.Config{
-		LibraryRoot:  dir,
-		DatabasePath: filepath.Join(dir, "t.db"),
-		ListenAddr:   ":0",
-		AuthMode:     "authenticated",
-		HLSRoot:      filepath.Join(dir, "hls"),
+		LibraryRoot: dir,
+		DatabaseDSN: dsn,
+		ListenAddr:  ":0",
+		AuthMode:    "authenticated",
+		HLSRoot:     filepath.Join(dir, "hls"),
 	}
-	mcfg := &meta.Config{LibraryRoot: dir, DatabasePath: cfg.DatabasePath}
+	mcfg := &meta.Config{LibraryRoot: dir, DatabaseDSN: cfg.DatabaseDSN}
 	srv, err := web.New(cfg, mcfg, catalog, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)

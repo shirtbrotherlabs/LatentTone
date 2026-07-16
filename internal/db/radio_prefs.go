@@ -76,14 +76,14 @@ func (d *DB) UpsertRadioPrefs(p RadioPrefs) (RadioPrefs, error) {
 INSERT INTO user_radio_prefs (
   user_id, radio_bridge, artist_cooldown, query_jitter, artist_penalty, bounded_random, jitter_alpha, updated_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(user_id) DO UPDATE SET
-  radio_bridge = excluded.radio_bridge,
-  artist_cooldown = excluded.artist_cooldown,
-  query_jitter = excluded.query_jitter,
-  artist_penalty = excluded.artist_penalty,
-  bounded_random = excluded.bounded_random,
-  jitter_alpha = excluded.jitter_alpha,
-  updated_at = excluded.updated_at`,
+ON DUPLICATE KEY UPDATE
+  radio_bridge = VALUES(radio_bridge),
+  artist_cooldown = VALUES(artist_cooldown),
+  query_jitter = VALUES(query_jitter),
+  artist_penalty = VALUES(artist_penalty),
+  bounded_random = VALUES(bounded_random),
+  jitter_alpha = VALUES(jitter_alpha),
+  updated_at = VALUES(updated_at)`,
 		p.UserID,
 		boolInt(p.RadioBridge),
 		boolInt(p.ArtistCooldown),

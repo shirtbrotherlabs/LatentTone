@@ -1,99 +1,113 @@
--- Phase 1 catalog schema
+-- Phase 1 catalog schema (MariaDB)
+-- Case-insensitive name/title matching relies on the table default collation
+-- (utf8mb4_unicode_ci) rather than SQLite's COLLATE NOCASE.
 
-PRAGMA foreign_keys = ON;
+CREATE TABLE IF NOT EXISTS artists (
+    id              BIGINT       NOT NULL AUTO_INCREMENT,
+    name            VARCHAR(255) NOT NULL,
+    name_sort       VARCHAR(255),
+    mbid            VARCHAR(36),
+    created_at      VARCHAR(32)  NOT NULL,
+    updated_at      VARCHAR(32)  NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_artists_name (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE artists (
-    id              INTEGER PRIMARY KEY,
-    name            TEXT    NOT NULL,
-    name_sort       TEXT,
-    mbid            TEXT,
-    created_at      TEXT    NOT NULL,
-    updated_at      TEXT    NOT NULL,
-    UNIQUE (name COLLATE NOCASE)
-);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_artists_mbid ON artists (mbid);
+CREATE INDEX IF NOT EXISTS idx_artists_name_sort ON artists (name_sort);
 
-CREATE UNIQUE INDEX idx_artists_mbid ON artists (mbid) WHERE mbid IS NOT NULL AND mbid != '';
-CREATE INDEX idx_artists_name_sort ON artists (name_sort);
-
-CREATE TABLE albums (
-    id              INTEGER PRIMARY KEY,
-    artist_id       INTEGER REFERENCES artists (id),
-    title           TEXT    NOT NULL,
-    title_sort      TEXT,
+CREATE TABLE IF NOT EXISTS albums (
+    id              BIGINT       NOT NULL AUTO_INCREMENT,
+    artist_id       BIGINT,
+    title           VARCHAR(255) NOT NULL,
+    title_sort      VARCHAR(255),
     year            INTEGER,
-    mbid            TEXT,
+    mbid            VARCHAR(36),
     cover_path      TEXT,
-    created_at      TEXT    NOT NULL,
-    updated_at      TEXT    NOT NULL
-);
+    created_at      VARCHAR(32)  NOT NULL,
+    updated_at      VARCHAR(32)  NOT NULL,
+    PRIMARY KEY (id),
+    CONSTRAINT fk_albums_artist FOREIGN KEY (artist_id) REFERENCES artists (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE UNIQUE INDEX idx_albums_mbid ON albums (mbid) WHERE mbid IS NOT NULL AND mbid != '';
-CREATE INDEX idx_albums_artist ON albums (artist_id);
-CREATE INDEX idx_albums_title ON albums (title COLLATE NOCASE);
-CREATE UNIQUE INDEX idx_albums_artist_title ON albums (artist_id, title COLLATE NOCASE);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_albums_mbid ON albums (mbid);
+CREATE INDEX IF NOT EXISTS idx_albums_artist ON albums (artist_id);
+CREATE INDEX IF NOT EXISTS idx_albums_title ON albums (title);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_albums_artist_title ON albums (artist_id, title);
 
-CREATE TABLE tracks (
-    id              INTEGER PRIMARY KEY,
-    album_id        INTEGER REFERENCES albums (id),
-    path            TEXT    NOT NULL,
-    path_hash       TEXT,
-    file_mtime      INTEGER,
-    file_size       INTEGER,
-    title           TEXT    NOT NULL,
+-- path is indexed for uniqueness; 700 chars * 4 bytes (utf8mb4) stays under the
+-- 3072-byte InnoDB key-prefix limit (DYNAMIC row format, MariaDB default).
+CREATE TABLE IF NOT EXISTS tracks (
+    id              BIGINT        NOT NULL AUTO_INCREMENT,
+    album_id        BIGINT,
+    path            VARCHAR(700)  NOT NULL,
+    path_hash       VARCHAR(64),
+    file_mtime      BIGINT,
+    file_size       BIGINT,
+    title           VARCHAR(500)  NOT NULL,
     track_number    INTEGER,
     disc_number     INTEGER DEFAULT 1,
-    duration_ms     INTEGER,
+    duration_ms     BIGINT,
     bitrate_kbps    INTEGER,
     sample_rate_hz  INTEGER,
     channels        INTEGER,
-    format          TEXT,
+    format          VARCHAR(16),
     year            INTEGER,
     comment         TEXT,
-    mbid            TEXT,
-    catalogued_at   TEXT    NOT NULL,
-    updated_at      TEXT    NOT NULL,
-    missing_at      TEXT,
-    UNIQUE (path)
-);
+    mbid            VARCHAR(36),
+    catalogued_at   VARCHAR(32)   NOT NULL,
+    updated_at      VARCHAR(32)   NOT NULL,
+    missing_at      VARCHAR(32),
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_tracks_path (path),
+    CONSTRAINT fk_tracks_album FOREIGN KEY (album_id) REFERENCES albums (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE UNIQUE INDEX idx_tracks_mbid ON tracks (mbid) WHERE mbid IS NOT NULL AND mbid != '';
-CREATE INDEX idx_tracks_album ON tracks (album_id);
-CREATE INDEX idx_tracks_title ON tracks (title COLLATE NOCASE);
-CREATE INDEX idx_tracks_missing ON tracks (missing_at);
-CREATE INDEX idx_tracks_mtime ON tracks (file_mtime);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_mbid ON tracks (mbid);
+CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks (album_id);
+CREATE INDEX IF NOT EXISTS idx_tracks_title ON tracks (title);
+CREATE INDEX IF NOT EXISTS idx_tracks_missing ON tracks (missing_at);
+CREATE INDEX IF NOT EXISTS idx_tracks_mtime ON tracks (file_mtime);
 
-CREATE TABLE track_artists (
-    track_id        INTEGER NOT NULL REFERENCES tracks (id) ON DELETE CASCADE,
-    artist_id       INTEGER NOT NULL REFERENCES artists (id) ON DELETE CASCADE,
-    role            TEXT    NOT NULL DEFAULT 'primary',
-    position        INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (track_id, artist_id, role)
-);
+CREATE TABLE IF NOT EXISTS track_artists (
+    track_id        BIGINT      NOT NULL,
+    artist_id       BIGINT      NOT NULL,
+    role            VARCHAR(32) NOT NULL DEFAULT 'primary',
+    position        INTEGER     NOT NULL DEFAULT 0,
+    PRIMARY KEY (track_id, artist_id, role),
+    CONSTRAINT fk_track_artists_track FOREIGN KEY (track_id) REFERENCES tracks (id) ON DELETE CASCADE,
+    CONSTRAINT fk_track_artists_artist FOREIGN KEY (artist_id) REFERENCES artists (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE genres (
-    id              INTEGER PRIMARY KEY,
-    name            TEXT    NOT NULL,
-    parent_id       INTEGER REFERENCES genres (id),
-    UNIQUE (name COLLATE NOCASE)
-);
+CREATE TABLE IF NOT EXISTS genres (
+    id              BIGINT       NOT NULL AUTO_INCREMENT,
+    name            VARCHAR(255) NOT NULL,
+    parent_id       BIGINT,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_genres_name (name),
+    CONSTRAINT fk_genres_parent FOREIGN KEY (parent_id) REFERENCES genres (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE track_genres (
-    track_id        INTEGER NOT NULL REFERENCES tracks (id) ON DELETE CASCADE,
-    genre_id        INTEGER NOT NULL REFERENCES genres (id) ON DELETE CASCADE,
-    source          TEXT,
-    PRIMARY KEY (track_id, genre_id)
-);
+CREATE TABLE IF NOT EXISTS track_genres (
+    track_id        BIGINT      NOT NULL,
+    genre_id        BIGINT      NOT NULL,
+    source          VARCHAR(32),
+    PRIMARY KEY (track_id, genre_id),
+    CONSTRAINT fk_track_genres_track FOREIGN KEY (track_id) REFERENCES tracks (id) ON DELETE CASCADE,
+    CONSTRAINT fk_track_genres_genre FOREIGN KEY (genre_id) REFERENCES genres (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE INDEX idx_genres_parent ON genres (parent_id);
+CREATE INDEX IF NOT EXISTS idx_genres_parent ON genres (parent_id);
 
-CREATE TABLE scan_runs (
-    id              INTEGER PRIMARY KEY,
-    started_at      TEXT    NOT NULL,
-    finished_at     TEXT,
-    trigger         TEXT    NOT NULL,
+CREATE TABLE IF NOT EXISTS scan_runs (
+    id              BIGINT       NOT NULL AUTO_INCREMENT,
+    started_at      VARCHAR(32)  NOT NULL,
+    finished_at     VARCHAR(32),
+    `trigger`       VARCHAR(32)  NOT NULL,
     files_seen      INTEGER,
     files_upserted  INTEGER,
     files_missing   INTEGER,
-    status          TEXT    NOT NULL,
-    error_message   TEXT
-);
+    status          VARCHAR(32)  NOT NULL,
+    error_message   TEXT,
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

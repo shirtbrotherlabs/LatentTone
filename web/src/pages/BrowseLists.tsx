@@ -10,7 +10,13 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { CatalogAlbum, CatalogArtist, CatalogTrack } from "../api/types";
 import { TrackTable } from "../components/TrackTable";
+import { useBrowseScrollRestore } from "../hooks/useBrowseScrollRestore";
 import { usePlayer } from "../player/PlayerContext";
+
+/** In-memory caches so Back can restore scroll before the network round-trip. */
+let artistsListCache: CatalogArtist[] | null = null;
+let albumsListCache: CatalogAlbum[] | null = null;
+let yearsListCache: { year: number; count: number }[] | null = null;
 
 function artistLetter(name: string): string {
   const ch = (name.trim()[0] || "#").toUpperCase();
@@ -29,14 +35,18 @@ function CoverThumb({ url, label }: { url?: string; label: string }) {
 }
 
 export function ArtistsList() {
-  const [artists, setArtists] = useState<CatalogArtist[]>([]);
+  const [artists, setArtists] = useState<CatalogArtist[]>(() => artistsListCache ?? []);
   const [error, setError] = useState<string | null>(null);
   const sectionRefs = useRef<Record<string, HTMLElement | null>>({});
+  useBrowseScrollRestore("library/artists", artists.length > 0);
 
   useEffect(() => {
     void api
       .listArtists()
-      .then((r) => setArtists(r.artists))
+      .then((r) => {
+        artistsListCache = r.artists;
+        setArtists(r.artists);
+      })
       .catch((e) => setError(e instanceof Error ? e.message : "failed"));
   }, []);
 
@@ -132,12 +142,16 @@ export function ArtistDetail() {
 }
 
 export function AlbumsList() {
-  const [albums, setAlbums] = useState<CatalogAlbum[]>([]);
+  const [albums, setAlbums] = useState<CatalogAlbum[]>(() => albumsListCache ?? []);
   const [error, setError] = useState<string | null>(null);
+  useBrowseScrollRestore("library/albums", albums.length > 0);
   useEffect(() => {
     void api
       .listAlbums()
-      .then((r) => setAlbums(r.albums))
+      .then((r) => {
+        albumsListCache = r.albums;
+        setAlbums(r.albums);
+      })
       .catch((e) => setError(e instanceof Error ? e.message : "failed"));
   }, []);
   if (error) return <p className="error">{error}</p>;
@@ -250,12 +264,18 @@ export function TracksList() {
 }
 
 export function YearsList() {
-  const [years, setYears] = useState<{ year: number; count: number }[]>([]);
+  const [years, setYears] = useState<{ year: number; count: number }[]>(
+    () => yearsListCache ?? [],
+  );
   const [error, setError] = useState<string | null>(null);
+  useBrowseScrollRestore("library/years", years.length > 0);
   useEffect(() => {
     void api
       .listYears()
-      .then((r) => setYears(r.years))
+      .then((r) => {
+        yearsListCache = r.years;
+        setYears(r.years);
+      })
       .catch((e) => setError(e instanceof Error ? e.message : "failed"));
   }, []);
   if (error) return <p className="error">{error}</p>;

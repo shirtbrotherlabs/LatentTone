@@ -1,6 +1,6 @@
 # Phase 2 metadata / embedding tool
 library_root: /music
-database_path: /data/latenttone.db
+database_dsn: "latenttone:latenttone@tcp(mariadb:3306)/latenttone?parseTime=true&charset=utf8mb4&collation=utf8mb4_unicode_ci"
 
 # Enabled extractors (order = compiled vector concat order)
 extractors:

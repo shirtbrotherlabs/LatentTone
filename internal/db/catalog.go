@@ -11,7 +11,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
-	"time"
 )
 
 // TrackInput is catalog upsert payload from the scanner.
@@ -89,10 +88,11 @@ func (d *DB) UpsertTrack(in TrackInput) (trackID int64, err error) {
 	return results[0].TrackID, results[0].Err
 }
 
-// UpsertTracks writes many tracks in a single SQLite transaction.
-// Concurrent metadata readers feed this; SQLite still has one writer, so the
-// batch is serialized under writeMu. Per-track SAVEPOINTs keep one bad file
-// from rolling back the whole batch.
+// UpsertTracks writes many tracks in a single transaction.
+// Concurrent scanner batches feed this; the batch is serialized under
+// writeMu to avoid InnoDB deadlocks between overlapping batches sharing
+// artist/album rows within this process. Per-track SAVEPOINTs keep one bad
+// file from rolling back the whole batch.
 func (d *DB) UpsertTracks(batch []TrackInput) ([]UpsertTrackResult, error) {
 	out := make([]UpsertTrackResult, 0, len(batch))
 	if len(batch) == 0 {
@@ -102,18 +102,7 @@ func (d *DB) UpsertTracks(batch []TrackInput) ([]UpsertTrackResult, error) {
 	d.writeMu.Lock()
 	defer d.writeMu.Unlock()
 
-	var lastErr error
-	for attempt := 0; attempt < 8; attempt++ {
-		out, lastErr = d.upsertTracksLocked(batch)
-		if lastErr == nil {
-			return out, nil
-		}
-		if !isSQLiteBusy(lastErr) {
-			return nil, lastErr
-		}
-		time.Sleep(time.Duration(50*(attempt+1)) * time.Millisecond)
-	}
-	return nil, lastErr
+	return d.upsertTracksLocked(batch)
 }
 
 func (d *DB) upsertTracksLocked(batch []TrackInput) ([]UpsertTrackResult, error) {
@@ -133,31 +122,19 @@ func (d *DB) upsertTracksLocked(batch []TrackInput) ([]UpsertTrackResult, error)
 		res := UpsertTrackResult{Path: in.Path}
 		sp := fmt.Sprintf("sp_%d", i)
 		if _, e := tx.Exec("SAVEPOINT " + sp); e != nil {
-			if isSQLiteBusy(e) {
-				err = e
-				return nil, err
-			}
 			res.Err = e
 			out = append(out, res)
 			continue
 		}
 		id, e := upsertTrackTx(tx, in, now)
 		if e != nil {
-			_, _ = tx.Exec("ROLLBACK TO " + sp)
-			_, _ = tx.Exec("RELEASE " + sp)
-			if isSQLiteBusy(e) {
-				err = e
-				return nil, err
-			}
+			_, _ = tx.Exec("ROLLBACK TO SAVEPOINT " + sp)
+			_, _ = tx.Exec("RELEASE SAVEPOINT " + sp)
 			res.Err = e
 			out = append(out, res)
 			continue
 		}
-		if _, e := tx.Exec("RELEASE " + sp); e != nil {
-			if isSQLiteBusy(e) {
-				err = e
-				return nil, err
-			}
+		if _, e := tx.Exec("RELEASE SAVEPOINT " + sp); e != nil {
 			res.Err = e
 			out = append(out, res)
 			continue
@@ -170,14 +147,6 @@ func (d *DB) upsertTracksLocked(batch []TrackInput) ([]UpsertTrackResult, error)
 		return nil, err
 	}
 	return out, nil
-}
-
-func isSQLiteBusy(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "database is locked") || strings.Contains(msg, "sqlite_busy")
 }
 
 func upsertTrackTx(tx *sql.Tx, in TrackInput, now string) (trackID int64, err error) {
@@ -281,7 +250,8 @@ WHERE id = ?`,
 			role = "featured"
 		}
 		_, err = tx.Exec(
-			`INSERT OR REPLACE INTO track_artists (track_id, artist_id, role, position) VALUES (?, ?, ?, ?)`,
+			`INSERT INTO track_artists (track_id, artist_id, role, position) VALUES (?, ?, ?, ?)
+ON DUPLICATE KEY UPDATE position = VALUES(position)`,
 			trackID, aid, role, i,
 		)
 		if err != nil {
@@ -299,7 +269,7 @@ WHERE id = ?`,
 			return 0, e
 		}
 		_, err = tx.Exec(
-			`INSERT OR IGNORE INTO track_genres (track_id, genre_id, source) VALUES (?, ?, 'tag')`,
+			`INSERT IGNORE INTO track_genres (track_id, genre_id, source) VALUES (?, ?, 'tag')`,
 			trackID, gid,
 		)
 		if err != nil {
@@ -309,9 +279,11 @@ WHERE id = ?`,
 	return trackID, nil
 }
 
+// upsertArtistTx matches by name case-insensitively via the artists table's
+// default collation (utf8mb4_unicode_ci).
 func upsertArtistTx(tx *sql.Tx, name, now string) (int64, error) {
 	var id int64
-	err := tx.QueryRow(`SELECT id FROM artists WHERE name = ? COLLATE NOCASE`, name).Scan(&id)
+	err := tx.QueryRow(`SELECT id FROM artists WHERE name = ?`, name).Scan(&id)
 	if err == nil {
 		_, err = tx.Exec(`UPDATE artists SET updated_at = ? WHERE id = ?`, now, id)
 		return id, err
@@ -325,16 +297,18 @@ func upsertArtistTx(tx *sql.Tx, name, now string) (int64, error) {
 	)
 	if err != nil {
 		// concurrent insert race
-		err2 := tx.QueryRow(`SELECT id FROM artists WHERE name = ? COLLATE NOCASE`, name).Scan(&id)
+		err2 := tx.QueryRow(`SELECT id FROM artists WHERE name = ?`, name).Scan(&id)
 		return id, err2
 	}
 	return res.LastInsertId()
 }
 
+// upsertAlbumTx matches by (artist_id, title) case-insensitively via the
+// albums table's default collation (utf8mb4_unicode_ci).
 func upsertAlbumTx(tx *sql.Tx, artistID int64, title string, year *int, coverPath, now string) (int64, error) {
 	var id int64
 	err := tx.QueryRow(
-		`SELECT id FROM albums WHERE artist_id = ? AND title = ? COLLATE NOCASE`,
+		`SELECT id FROM albums WHERE artist_id = ? AND title = ?`,
 		artistID, title,
 	).Scan(&id)
 	if err == nil {
@@ -356,7 +330,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?)`,
 	)
 	if err != nil {
 		err2 := tx.QueryRow(
-			`SELECT id FROM albums WHERE artist_id = ? AND title = ? COLLATE NOCASE`,
+			`SELECT id FROM albums WHERE artist_id = ? AND title = ?`,
 			artistID, title,
 		).Scan(&id)
 		return id, err2
@@ -364,9 +338,11 @@ VALUES (?, ?, ?, ?, ?, ?, ?)`,
 	return res.LastInsertId()
 }
 
+// upsertGenreTx matches by name case-insensitively via the genres table's
+// default collation (utf8mb4_unicode_ci).
 func upsertGenreTx(tx *sql.Tx, name string) (int64, error) {
 	var id int64
-	err := tx.QueryRow(`SELECT id FROM genres WHERE name = ? COLLATE NOCASE`, name).Scan(&id)
+	err := tx.QueryRow(`SELECT id FROM genres WHERE name = ?`, name).Scan(&id)
 	if err == nil {
 		return id, nil
 	}
@@ -375,7 +351,7 @@ func upsertGenreTx(tx *sql.Tx, name string) (int64, error) {
 	}
 	res, err := tx.Exec(`INSERT INTO genres (name) VALUES (?)`, name)
 	if err != nil {
-		err2 := tx.QueryRow(`SELECT id FROM genres WHERE name = ? COLLATE NOCASE`, name).Scan(&id)
+		err2 := tx.QueryRow(`SELECT id FROM genres WHERE name = ?`, name).Scan(&id)
 		return id, err2
 	}
 	return res.LastInsertId()
@@ -466,7 +442,7 @@ func (d *DB) ListTrackFiles() ([]TrackFileInfo, error) {
 // BeginScanRun records a new scan run; returns id.
 func (d *DB) BeginScanRun(trigger string) (int64, error) {
 	res, err := d.SQL.Exec(
-		`INSERT INTO scan_runs (started_at, trigger, status) VALUES (?, ?, 'running')`,
+		"INSERT INTO scan_runs (started_at, `trigger`, status) VALUES (?, ?, 'running')",
 		Now(), trigger,
 	)
 	if err != nil {
@@ -539,7 +515,7 @@ SELECT a.id, a.name,
        SELECT 1 FROM tracks t
        WHERE t.album_id = al.id AND t.missing_at IS NULL
      )
-   ORDER BY al.year, al.title COLLATE NOCASE
+   ORDER BY al.year, al.title
    LIMIT 1) AS cover_path
 FROM artists a
 WHERE EXISTS (
@@ -550,7 +526,7 @@ WHERE EXISTS (
       WHERE t.album_id = al.id AND t.missing_at IS NULL
     )
 )
-ORDER BY COALESCE(a.name_sort, a.name) COLLATE NOCASE`)
+ORDER BY COALESCE(a.name_sort, a.name)`)
 	if err != nil {
 		return nil, err
 	}
@@ -587,7 +563,7 @@ FROM albums al
 LEFT JOIN artists a ON a.id = al.artist_id
 WHERE al.artist_id = ?
   AND EXISTS (SELECT 1 FROM tracks t WHERE t.album_id = al.id AND t.missing_at IS NULL)
-ORDER BY al.year, al.title COLLATE NOCASE`, artistID)
+ORDER BY al.year, al.title`, artistID)
 	if err != nil {
 		return nil, err
 	}
@@ -618,13 +594,13 @@ func (d *DB) ListTracksByAlbum(albumID int64) ([]Track, error) {
 SELECT t.id, t.album_id, t.path, t.title, t.track_number, t.disc_number, t.duration_ms,
        t.bitrate_kbps, t.sample_rate_hz, t.channels, t.format, COALESCE(t.year, al.year), t.comment, t.missing_at,
        COALESCE(al.title, ''), COALESCE(a.name, ''), al.cover_path,
-       COALESCE((SELECT GROUP_CONCAT(g.name, ', ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id), ''),
+       COALESCE((SELECT GROUP_CONCAT(g.name SEPARATOR ', ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id), ''),
        al.artist_id
 FROM tracks t
 LEFT JOIN albums al ON al.id = t.album_id
 LEFT JOIN artists a ON a.id = al.artist_id
 WHERE t.album_id = ? AND t.missing_at IS NULL
-ORDER BY COALESCE(t.disc_number,1), COALESCE(t.track_number, 9999), t.title COLLATE NOCASE`, albumID)
+ORDER BY COALESCE(t.disc_number,1), COALESCE(t.track_number, 9999), t.title`, albumID)
 	if err != nil {
 		return nil, err
 	}
@@ -638,7 +614,7 @@ func (d *DB) GetTrack(id int64) (*Track, error) {
 SELECT t.id, t.album_id, t.path, t.title, t.track_number, t.disc_number, t.duration_ms,
        t.bitrate_kbps, t.sample_rate_hz, t.channels, t.format, COALESCE(t.year, al.year), t.comment, t.missing_at,
        COALESCE(al.title, ''), COALESCE(a.name, ''), al.cover_path,
-       COALESCE((SELECT GROUP_CONCAT(g.name, ', ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id), ''),
+       COALESCE((SELECT GROUP_CONCAT(g.name SEPARATOR ', ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id), ''),
        al.artist_id
 FROM tracks t
 LEFT JOIN albums al ON al.id = t.album_id
@@ -673,7 +649,7 @@ func (d *DB) ListSeedSuggestions(limit int) ([]Track, error) {
 SELECT t.id, t.album_id, t.path, t.title, t.track_number, t.disc_number, t.duration_ms,
        t.bitrate_kbps, t.sample_rate_hz, t.channels, t.format, COALESCE(t.year, al.year), t.comment, t.missing_at,
        COALESCE(al.title, ''), COALESCE(a.name, ''), al.cover_path,
-       COALESCE((SELECT GROUP_CONCAT(g.name, ', ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id), ''),
+       COALESCE((SELECT GROUP_CONCAT(g.name SEPARATOR ', ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id), ''),
        al.artist_id
 FROM tracks t
 LEFT JOIN albums al ON al.id = t.album_id
@@ -682,7 +658,7 @@ LEFT JOIN artists a ON a.id = al.artist_id`
 	played, err := d.SQL.Query(trackCols+`
 WHERE t.missing_at IS NULL
   AND EXISTS (SELECT 1 FROM playback_events pe WHERE pe.track_id = t.id)
-ORDER BY RANDOM()
+ORDER BY RAND()
 LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -711,7 +687,7 @@ WHERE t.missing_at IS NULL`
   AND t.id NOT IN (` + strings.Join(exclude, ",") + `)`
 	}
 	sqlStr += `
-ORDER BY RANDOM()
+ORDER BY RAND()
 LIMIT ?`
 	fill, err := d.SQL.Query(sqlStr, args...)
 	if err != nil {
@@ -742,9 +718,9 @@ func (d *DB) ListTracksFiltered(limit int, q string, year int) ([]Track, error) 
 		args = append(args, year)
 	}
 	if q != "" {
-		where = append(where, `(t.title LIKE ? COLLATE NOCASE
-			OR COALESCE(a.name, '') LIKE ? COLLATE NOCASE
-			OR COALESCE(al.title, '') LIKE ? COLLATE NOCASE)`)
+		where = append(where, `(t.title LIKE ?
+			OR COALESCE(a.name, '') LIKE ?
+			OR COALESCE(al.title, '') LIKE ?)`)
 		like := "%" + q + "%"
 		args = append(args, like, like, like)
 	}
@@ -753,13 +729,13 @@ func (d *DB) ListTracksFiltered(limit int, q string, year int) ([]Track, error) 
 SELECT t.id, t.album_id, t.path, t.title, t.track_number, t.disc_number, t.duration_ms,
        t.bitrate_kbps, t.sample_rate_hz, t.channels, t.format, COALESCE(t.year, al.year), t.comment, t.missing_at,
        COALESCE(al.title, ''), COALESCE(a.name, ''), al.cover_path,
-       COALESCE((SELECT GROUP_CONCAT(g.name, ', ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id), ''),
+       COALESCE((SELECT GROUP_CONCAT(g.name SEPARATOR ', ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id), ''),
        al.artist_id
 FROM tracks t
 LEFT JOIN albums al ON al.id = t.album_id
 LEFT JOIN artists a ON a.id = al.artist_id
 WHERE ` + strings.Join(where, " AND ") + `
-ORDER BY t.title COLLATE NOCASE
+ORDER BY t.title
 LIMIT ?`
 	rows, err := d.SQL.Query(sqlStr, args...)
 	if err != nil {
@@ -782,7 +758,7 @@ SELECT al.id, al.artist_id, al.title, al.year, al.cover_path, COALESCE(a.name, '
 FROM albums al
 LEFT JOIN artists a ON a.id = al.artist_id
 WHERE EXISTS (SELECT 1 FROM tracks t WHERE t.album_id = al.id AND t.missing_at IS NULL)
-ORDER BY al.title COLLATE NOCASE
+ORDER BY al.title
 LIMIT ?`, limit)
 	if err != nil {
 		return nil, err

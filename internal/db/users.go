@@ -65,11 +65,13 @@ func (d *DB) CreateUserRole(username, passwordHash string, isAdmin bool) (*User,
 	}, nil
 }
 
-// GetUserByUsername returns a user or nil.
+// GetUserByUsername returns a user or nil. Case-insensitive matching relies
+// on the users table's default collation (utf8mb4_unicode_ci) rather than
+// SQLite's COLLATE NOCASE.
 func (d *DB) GetUserByUsername(username string) (*User, error) {
 	row := d.SQL.QueryRow(
 		`SELECT id, username, password_hash, COALESCE(is_admin, 0), created_at, updated_at
-		 FROM users WHERE username = ? COLLATE NOCASE`,
+		 FROM users WHERE username = ?`,
 		strings.TrimSpace(username),
 	)
 	return scanUser(row)

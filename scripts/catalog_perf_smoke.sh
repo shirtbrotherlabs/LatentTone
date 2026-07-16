@@ -7,7 +7,7 @@ set -euo pipefail
 BROWSE_PORT="${BROWSE_PORT:-18080}"
 BASE="http://127.0.0.1:${BROWSE_PORT}"
 
-# Budgets are generous for cold SQLite + host variance; without idx_tracks_album_missing
+# Budgets are generous for cold MariaDB + host variance; without idx_tracks_album_missing
 # /artists was ~10s. Override via env if needed.
 ARTISTS_MAX_S="${ARTISTS_MAX_S:-2.0}"
 ALBUMS_MAX_S="${ALBUMS_MAX_S:-1.0}"
@@ -57,18 +57,10 @@ check_json_ok "/api/v1/catalog/albums?limit=500" "albums" "$ALBUMS_MAX_S"
 check_json_ok "/api/v1/catalog/tracks?limit=200" "tracks" "$TRACKS_MAX_S"
 check_json_ok "/api/v1/catalog/years" "years" "$YEARS_MAX_S"
 
-if [[ -n "${DATA_DIR:-}" && -f "${DATA_DIR}/latenttone.db" ]]; then
-  echo "verifying performance indexes in $DATA_DIR/latenttone.db"
-  docker run --rm -v "$DATA_DIR:/data" --entrypoint python3 latenttone:dev -c '
-import sqlite3
-con=sqlite3.connect("/data/latenttone.db")
-names={r[0] for r in con.execute("select name from sqlite_master where type=\"index\"")}
-need={"idx_tracks_album_missing","idx_playback_events_track"}
-missing=sorted(need-names)
-if missing:
-    raise SystemExit("missing indexes: "+", ".join(missing))
-print("indexes ok:", ", ".join(sorted(need)))
-'
+if [[ -n "${DATA_DIR:-}" ]]; then
+  ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+  echo "verifying performance indexes via mariadb (MARIADB_DATA=${MARIADB_DATA:-$DATA_DIR/mariadb})"
+  bash "$ROOT/scripts/mariadb_exec.sh" indexes
 fi
 
 echo "catalog_perf_smoke ok"

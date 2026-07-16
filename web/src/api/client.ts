@@ -2,7 +2,7 @@
  * Copyright (C) 2026 martinsah
  * SPDX-License-Identifier: GPL-3.0-only
  * Author: martinsah
- * Date: 2026-07-15
+ * Date: 2026-07-16
  */
 
 import type {
@@ -24,25 +24,6 @@ import type {
   User,
 } from "./types";
 
-const TOKEN_KEY = "lt_bearer";
-
-export function getStoredToken(): string | null {
-  try {
-    return sessionStorage.getItem(TOKEN_KEY);
-  } catch {
-    return null;
-  }
-}
-
-export function setStoredToken(token: string | null) {
-  try {
-    if (token) sessionStorage.setItem(TOKEN_KEY, token);
-    else sessionStorage.removeItem(TOKEN_KEY);
-  } catch {
-    /* ignore */
-  }
-}
-
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -56,13 +37,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (init.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  const token = getStoredToken();
-  if (token && !headers.has("Authorization")) {
-    headers.set("Authorization", `Bearer ${token}`);
-  }
   const res = await fetch(path, {
     ...init,
     headers,
+    // Session is HttpOnly cookie `lt_session` — never store tokens in JS.
     credentials: "same-origin",
   });
   const text = await res.text();
@@ -90,13 +68,13 @@ export const api = {
     return request<PublicConfig>("/api/v1/config");
   },
   register(username: string, password: string) {
-    return request<{ user: User; token: string }>("/api/v1/auth/register", {
+    return request<{ user: User; token?: string }>("/api/v1/auth/register", {
       method: "POST",
       body: JSON.stringify({ username, password }),
     });
   },
   login(username: string, password: string) {
-    return request<{ user: User; token: string }>("/api/v1/auth/login", {
+    return request<{ user: User; token?: string }>("/api/v1/auth/login", {
       method: "POST",
       body: JSON.stringify({ username, password }),
     });

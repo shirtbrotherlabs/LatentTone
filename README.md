@@ -8,10 +8,10 @@ LatentTone is an open-source, self-hosted music server designed for automated au
 
 ## What you get
 
-* Config-driven scanner (`configs/scanner.yaml`) → SQLite catalog + cover paths
-* Config-driven embedder (`configs/metadata.yaml`) → Essentia + catalog/filesig features in SQLite; LanceDB mirror for ANN
+* Config-driven scanner (`configs/scanner.yaml`) → MariaDB catalog + cover paths
+* Config-driven embedder (`configs/metadata.yaml`) → Essentia + catalog/filesig features in MariaDB; LanceDB mirror for ANN
 * Browse UI: Artist → Album → Track, covers, feature JSON on track page, neighbor playlist generator, Start/Stop embed
-* Auth API (argon2id): register / login / logout / me — HTTP-only cookie + Bearer opaque token (ADR-005)
+* Auth API (argon2id): register / login / logout / me — HttpOnly `lt_session` cookie for the SPA; opaque Bearer token still accepted for scripts/Swagger (ADR-005). Same-origin only (no CORS). Secure cookies when `public_base_url` is HTTPS (override with `SECURE_COOKIE`).
 * Listening sessions + short-poll status; feedback (`like` / `dislike` / `skip` / `ban`) steers per-user queue (ADR-007)
 * HLS under `/data/hls/{session_id}` + progressive `GET /api/v1/tracks/{id}/stream` (ADR-006)
 * **Product SPA** at `/app/` — login/register, listen + floating player, catalog browse (Artist / Album / Track / Year), playlists, track actions (play next / thumbs / radio / playlist-from-track)
@@ -26,8 +26,11 @@ LatentTone is an open-source, self-hosted music server designed for automated au
 ```bash
 cp .env.example .env
 # MUSIC_LIBRARY=/path/to/library  (mounted :ro — required)
+# MARIADB_PASSWORD / MARIADB_ROOT_PASSWORD — required, no defaults (catalog DB)
 docker compose up --build -d browse
 ```
+
+Compose brings up a `mariadb` service (catalog / users / vectors status) alongside `browse`, and waits for its healthcheck before starting. Covers, HLS segments, and the LanceDB vector index stay on the `${DATA_DIR:-./data}` filesystem volume.
 
 **Product client:** <http://localhost:8080/> (redirects to `/app/`)  
 Operator catalog inspector: <http://localhost:8080/browse>
@@ -41,6 +44,8 @@ PUBLIC_BASE_URL=https://latent.lt.lkeng.org/
 ```
 
 Compose passes this into the `browse` container. The Go server also accepts `LATENTTONE_PUBLIC_URL` or `public_base_url` in `configs/scanner.yaml`. Clients read it from `GET /api/v1/config` (no auth). Use this for MediaSession cover URLs and any absolute links — do not leave production pointed at `localhost`.
+
+When `public_base_url` is `https://…`, session cookies are marked **Secure** (browsers only send them over HTTPS). For plain-HTTP local access to `:8080`, set `SECURE_COOKIE=false` (or `LATENTTONE_SECURE_COOKIE=false`). TLS/HSTS belong on the reverse proxy; the app sets `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, and CSP on responses.
 
 ```bash
 # One-shot catalog scan
@@ -79,6 +84,30 @@ latenttone embed --meta /config/metadata.yaml
 latenttone embed --meta /config/metadata.yaml --stop
 latenttone serve --config /config/scanner.yaml --meta /config/metadata.yaml
 ```
+
+### Importing an existing SQLite catalog (one-time, pre-MariaDB installs only)
+
+Installs created before the MariaDB migration keep their catalog at `data/latenttone.db`. `latenttone migrate-sqlite` is a one-shot importer that copies it into MariaDB, preserving primary keys so LanceDB vector ids and playlist/session references stay valid. It shells out to the `sqlite3` CLI to read the source file, so it adds **no** SQLite dependency to the app itself — `go.mod` stays MariaDB-only.
+
+```bash
+# Stop browse/embed first to avoid racing writes against the empty target catalog.
+docker compose stop browse
+
+# Dry run (default): counts source rows, writes nothing. Uses the same
+# DATABASE_DSN / scanner.yaml the browse service would (mounted config, same
+# mariadb service on the Compose network).
+docker compose run --rm browse migrate-sqlite --source /data/latenttone.db
+
+# Real import: TRUNCATEs each destination table and re-imports from source.
+# Idempotent — safe to re-run.
+docker compose run --rm browse migrate-sqlite --source /data/latenttone.db --yes
+
+docker compose start browse
+```
+
+A handful of SQLite rows that were distinct under `COLLATE NOCASE` (ASCII case-fold only — e.g. two artists tagged "Live" and "Lïve") can collide under MariaDB's `utf8mb4_unicode_ci` (case- **and** accent-insensitive). The importer detects these, merges the duplicate onto the surviving row, and remaps every reference to it; it also drops (and logs) any row that fails on pre-existing bad source data, such as a value too wide for its column. The final summary reports per-table source/imported counts — investigate before trusting the catalog if any table shows `MISMATCH`.
+
+If there is no `data/latenttone.db` to import (fresh installs), skip this step — `latenttone scan` populates the MariaDB catalog directly.
 
 ### API (auth)
 
@@ -182,8 +211,9 @@ curl -sS -X POST http://localhost:8080/api/v1/me/playlists/from-neighbor \
 | Mount / path | Role |
 |--------------|------|
 | `${MUSIC_LIBRARY}:/music:ro` | Library (read-only) |
-| `${DATA_DIR:-./data}:/data` | SQLite, LanceDB, HLS under `/data/hls` |
-| `configs/scanner.yaml` | Auth, `spa_root`, probe flags, `public_base_url` |
+| `${DATA_DIR:-./data}:/data` | Covers, LanceDB, HLS under `/data/hls` (catalog itself lives in the `mariadb` service, not this volume) |
+| `${MARIADB_DATA:-./data/mariadb}:/var/lib/mysql` | MariaDB datadir (catalog / users / vectors status) |
+| `configs/scanner.yaml` | Auth, `spa_root`, probe flags, `public_base_url`, `database_dsn` |
 | Port `8080` | SPA `/app/`, APIs `/api/v1/*`, operator UI `/` |
 
 See **Reverse proxy / public URL** above for `PUBLIC_BASE_URL` / TLS. Multi-arch: [`docs/MULTIARCH.md`](docs/MULTIARCH.md). Player / Android notes: [`docs/PLAYER.md`](docs/PLAYER.md).

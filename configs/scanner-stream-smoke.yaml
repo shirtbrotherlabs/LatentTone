@@ -3,7 +3,7 @@
 # Then open http://localhost:${BROWSE_PORT:-8080}/dev/stream
 # API docs: http://localhost:${BROWSE_PORT:-8080}/api/docs/ (enable_api_docs: true)
 library_root: /music
-database_path: /data/latenttone.db
+database_dsn: "latenttone:latenttone@tcp(mariadb:3306)/latenttone?parseTime=true&charset=utf8mb4&collation=utf8mb4_unicode_ci"
 
 extensions:
   - flac
@@ -32,7 +32,7 @@ listen_addr: ":8080"
 
 auth_mode: authenticated
 session_ttl: 24h
-secure_cookie: false
+# Omit secure_cookie — inferred from public_base_url (https → Secure).
 enable_stream_probe: true
 enable_api_docs: true
 hls_root: /data/hls

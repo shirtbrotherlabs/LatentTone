@@ -6,8 +6,6 @@
 package web
 
 import (
-	"encoding/json"
-	"io"
 	"net/http"
 
 	"github.com/shirtbrotherlabs/LatentTone/internal/auth"
@@ -50,8 +48,7 @@ type radioPrefsPatch struct {
 
 func (s *Server) patchRadioPrefs(w http.ResponseWriter, r *http.Request, userID int64) {
 	var body radioPrefsPatch
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	cur, err := s.DB.GetRadioPrefs(userID)

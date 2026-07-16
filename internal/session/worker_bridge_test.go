@@ -8,20 +8,15 @@ package session
 import (
 	"context"
 	"math/rand"
-	"path/filepath"
 	"testing"
 
 	"github.com/shirtbrotherlabs/LatentTone/internal/affinity"
 	"github.com/shirtbrotherlabs/LatentTone/internal/db"
+	"github.com/shirtbrotherlabs/LatentTone/internal/dbtest"
 )
 
 func TestFillQueueBridgeCadence(t *testing.T) {
-	dir := t.TempDir()
-	catalog, err := db.Open(filepath.Join(dir, "t.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer catalog.Close()
+	catalog, _ := dbtest.Open(t)
 	u, err := catalog.CreateUser("u", "hash")
 	if err != nil {
 		t.Fatal(err)

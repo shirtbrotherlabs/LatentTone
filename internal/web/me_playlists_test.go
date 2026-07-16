@@ -17,6 +17,7 @@ import (
 
 	"github.com/shirtbrotherlabs/LatentTone/internal/config"
 	"github.com/shirtbrotherlabs/LatentTone/internal/db"
+	"github.com/shirtbrotherlabs/LatentTone/internal/dbtest"
 	"github.com/shirtbrotherlabs/LatentTone/internal/meta"
 	"github.com/shirtbrotherlabs/LatentTone/internal/playlist"
 	"github.com/shirtbrotherlabs/LatentTone/internal/web"
@@ -25,11 +26,7 @@ import (
 func setupPlaylistAPI(t *testing.T) (http.Handler, *db.DB, int64, int64, int64) {
 	t.Helper()
 	dir := t.TempDir()
-	catalog, err := db.Open(filepath.Join(dir, "t.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = catalog.Close() })
+	catalog, dsn := dbtest.Open(t)
 
 	mk := func(path, title string) int64 {
 		tn := 1
@@ -47,13 +44,13 @@ func setupPlaylistAPI(t *testing.T) (http.Handler, *db.DB, int64, int64, int64) 
 	t3 := mk("a/3.mp3", "Three")
 
 	cfg := &config.Config{
-		LibraryRoot:  dir,
-		DatabasePath: filepath.Join(dir, "t.db"),
-		ListenAddr:   ":0",
-		AuthMode:     "authenticated",
-		HLSRoot:      filepath.Join(dir, "hls"),
+		LibraryRoot: dir,
+		DatabaseDSN: dsn,
+		ListenAddr:  ":0",
+		AuthMode:    "authenticated",
+		HLSRoot:     filepath.Join(dir, "hls"),
 	}
-	mcfg := &meta.Config{LibraryRoot: dir, DatabasePath: cfg.DatabasePath}
+	mcfg := &meta.Config{LibraryRoot: dir, DatabaseDSN: cfg.DatabaseDSN}
 	srv, err := web.New(cfg, mcfg, catalog, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -206,7 +203,7 @@ func TestNeighborGenerateStillWorksAndFromNeighbor(t *testing.T) {
 	h, catalog, t1, t2, t3 := setupPlaylistAPI(t)
 	alice := register(t, h, "alice")
 
-	// Seed vectors so CreateFromSeed can rank (optional store=nil uses SQLite vectors).
+	// Seed vectors so CreateFromSeed can rank (optional store=nil uses catalog-stored vectors).
 	mkVec := func(id int64, v []float32) {
 		if _, err := catalog.EnsureVectorRows("t", `{}`); err != nil {
 			t.Fatal(err)

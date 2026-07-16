@@ -10,7 +10,7 @@ Safari may use native HLS on `<audio>` when MSE/Hls.js is unavailable.
 
 ## Stream encode prefs (`/api/v1/me/stream-prefs`)
 
-Per-user defaults persisted in SQLite (`user_stream_prefs`):
+Per-user defaults persisted in MariaDB (`user_stream_prefs`):
 
 | `stream_format` | Progressive behavior | HLS audio |
 |-----------------|----------------------|-----------|

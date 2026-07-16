@@ -7,9 +7,7 @@ package web
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -101,8 +99,7 @@ type createUserPlaylistBody struct {
 
 func (s *Server) meCreatePlaylist(w http.ResponseWriter, r *http.Request, userID int64) {
 	var body createUserPlaylistBody
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid json")
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	name := strings.TrimSpace(body.Name)
@@ -151,8 +148,7 @@ type patchPlaylistBody struct {
 
 func (s *Server) meRenamePlaylist(w http.ResponseWriter, r *http.Request, userID, id int64) {
 	var body patchPlaylistBody
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid json")
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	name := strings.TrimSpace(body.Name)
@@ -238,8 +234,7 @@ func (s *Server) mePlaylistTracks(w http.ResponseWriter, r *http.Request, userID
 
 func (s *Server) meAddTracks(w http.ResponseWriter, r *http.Request, userID, playlistID int64) {
 	var body addTracksBody
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid json")
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	ids := body.TrackIDs
@@ -291,8 +286,7 @@ func (s *Server) meRemoveTrack(w http.ResponseWriter, r *http.Request, userID, p
 
 func (s *Server) meReorderTracks(w http.ResponseWriter, r *http.Request, userID, playlistID int64) {
 	var body reorderBody
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid json")
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	pl, err := s.DB.ReorderUserPlaylist(playlistID, userID, body.TrackIDs)
@@ -318,8 +312,7 @@ func (s *Server) meReorderTracks(w http.ResponseWriter, r *http.Request, userID,
 
 func (s *Server) meFromNeighbor(w http.ResponseWriter, r *http.Request, userID int64) {
 	var body fromNeighborBody
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "invalid json")
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	if body.PlaylistID <= 0 {

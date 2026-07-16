@@ -6,9 +6,9 @@ cd "$ROOT"
 
 export MUSIC_LIBRARY="${MUSIC_LIBRARY:-/mnt2/media/music}"
 export DATA_DIR="${DATA_DIR:-$(mktemp -d /tmp/latenttone-smoke-XXXX)}"
+export MARIADB_DATA="${MARIADB_DATA:-$DATA_DIR/mariadb}"
 export BROWSE_PORT="${BROWSE_PORT:-18080}"
 export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-lt-smoke-$$}"
-# Allow sidecar containers (e.g. keinos/sqlite3) to read the DB volume.
 chmod 755 "$DATA_DIR" 2>/dev/null || true
 
 cleanup() {
@@ -23,9 +23,7 @@ echo "COMPOSE_PROJECT_NAME=$COMPOSE_PROJECT_NAME"
 docker compose build
 docker compose --profile scan run --rm scan
 
-# Query via the app image (WAL DBs need a writable mount; avoid keinos/sqlite3 :ro).
-COUNT=$(docker run --rm -v "$DATA_DIR:/data" --entrypoint python3 latenttone:dev -c \
-  "import sqlite3; print(sqlite3.connect('/data/latenttone.db').execute('select count(*) from tracks where missing_at is null').fetchone()[0])")
+COUNT=$(bash "$ROOT/scripts/mariadb_exec.sh" "SELECT COUNT(*) FROM tracks WHERE missing_at IS NULL")
 echo "tracks in catalog: $COUNT"
 if [[ "$COUNT" -lt 1 ]]; then
   echo "expected at least one track" >&2

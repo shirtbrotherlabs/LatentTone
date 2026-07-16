@@ -12,26 +12,22 @@ import (
 	"testing"
 
 	"github.com/shirtbrotherlabs/LatentTone/internal/config"
-	"github.com/shirtbrotherlabs/LatentTone/internal/db"
+	"github.com/shirtbrotherlabs/LatentTone/internal/dbtest"
 	"github.com/shirtbrotherlabs/LatentTone/internal/meta"
 	"github.com/shirtbrotherlabs/LatentTone/internal/web"
 )
 
 func TestStreamPrefsAPI(t *testing.T) {
 	dir := t.TempDir()
-	catalog, err := db.Open(filepath.Join(dir, "t.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = catalog.Close() })
+	catalog, dsn := dbtest.Open(t)
 	cfg := &config.Config{
-		LibraryRoot:  dir,
-		DatabasePath: filepath.Join(dir, "t.db"),
-		ListenAddr:   ":0",
-		AuthMode:     "authenticated",
-		HLSRoot:      filepath.Join(dir, "hls"),
+		LibraryRoot: dir,
+		DatabaseDSN: dsn,
+		ListenAddr:  ":0",
+		AuthMode:    "authenticated",
+		HLSRoot:     filepath.Join(dir, "hls"),
 	}
-	mcfg := &meta.Config{LibraryRoot: dir, DatabasePath: cfg.DatabasePath}
+	mcfg := &meta.Config{LibraryRoot: dir, DatabaseDSN: cfg.DatabaseDSN}
 	srv, err := web.New(cfg, mcfg, catalog, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)

@@ -1,7 +1,28 @@
 services:
+  mariadb:
+    image: mariadb:11.4
+    environment:
+      TZ: UTC
+      MARIADB_DATABASE: latenttone
+      MARIADB_USER: latenttone
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:?set MARIADB_PASSWORD in .env}
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?set MARIADB_ROOT_PASSWORD in .env}
+    volumes:
+      - ${MARIADB_DATA:-./data/mariadb}:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+
   browse:
     build: .
     image: latenttone:dev
+    depends_on:
+      mariadb:
+        condition: service_healthy
     ports:
       - "${BROWSE_PORT:-8080}:8080"
     environment:
@@ -10,6 +31,7 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://latent.lt.lkeng.org/}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      DATABASE_DSN: latenttone:${MARIADB_PASSWORD}@tcp(mariadb:3306)/latenttone?parseTime=true&charset=utf8mb4&collation=utf8mb4_unicode_ci
     volumes:
       # Test/dev library — READ ONLY (required)
       - ${MUSIC_LIBRARY:-/mnt2/media/music}:/music:ro
@@ -26,6 +48,9 @@ services:
     profiles: ["stream-smoke"]
     build: .
     image: latenttone:dev
+    depends_on:
+      mariadb:
+        condition: service_healthy
     ports:
       - "${BROWSE_PORT:-8080}:8080"
     environment:
@@ -33,6 +58,7 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://latent.lt.lkeng.org/}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      DATABASE_DSN: latenttone:${MARIADB_PASSWORD}@tcp(mariadb:3306)/latenttone?parseTime=true&charset=utf8mb4&collation=utf8mb4_unicode_ci
     volumes:
       - ${MUSIC_LIBRARY:-/mnt2/media/music}:/music:ro
       - ${DATA_DIR:-./data}:/data
@@ -49,6 +75,12 @@ services:
     profiles: ["scan"]
     build: .
     image: latenttone:dev
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      TZ: UTC
+      DATABASE_DSN: latenttone:${MARIADB_PASSWORD}@tcp(mariadb:3306)/latenttone?parseTime=true&charset=utf8mb4&collation=utf8mb4_unicode_ci
     volumes:
       - ${MUSIC_LIBRARY:-/mnt2/media/music}:/music:ro
       - ${DATA_DIR:-./data}:/data
@@ -59,6 +91,12 @@ services:
     profiles: ["embed"]
     build: .
     image: latenttone:dev
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      TZ: UTC
+      DATABASE_DSN: latenttone:${MARIADB_PASSWORD}@tcp(mariadb:3306)/latenttone?parseTime=true&charset=utf8mb4&collation=utf8mb4_unicode_ci
     volumes:
       - ${MUSIC_LIBRARY:-/mnt2/media/music}:/music:ro
       - ${DATA_DIR:-./data}:/data
@@ -70,6 +108,12 @@ services:
     profiles: ["embed-ml"]
     build: .
     image: latenttone:dev
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      TZ: UTC
+      DATABASE_DSN: latenttone:${MARIADB_PASSWORD}@tcp(mariadb:3306)/latenttone?parseTime=true&charset=utf8mb4&collation=utf8mb4_unicode_ci
     volumes:
       - ${MUSIC_LIBRARY:-/mnt2/media/music}:/music:ro
       - ${DATA_DIR:-./data}:/data

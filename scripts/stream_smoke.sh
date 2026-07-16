@@ -6,6 +6,7 @@ cd "$ROOT"
 
 export MUSIC_LIBRARY="${MUSIC_LIBRARY:-/mnt2/media/music}"
 export DATA_DIR="${DATA_DIR:-$(mktemp -d /tmp/latenttone-stream-XXXX)}"
+export MARIADB_DATA="${MARIADB_DATA:-$DATA_DIR/mariadb}"
 export BROWSE_PORT="${BROWSE_PORT:-18081}"
 export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-lt-stream-$$}"
 BASE="http://127.0.0.1:${BROWSE_PORT}"
@@ -53,8 +54,7 @@ fi
 # Pick a seed track once the catalog UI is up (prefer scraping /tracks).
 SEED=$(curl -fsS "$BASE/tracks" | grep -oE '/tracks/[0-9]+' | head -1 | grep -oE '[0-9]+' || true)
 if [[ -z "$SEED" ]]; then
-  SEED=$(docker compose --profile stream-smoke exec -T browse-stream \
-    python3 -c "import sqlite3; print(sqlite3.connect('/data/latenttone.db').execute('select id from tracks where missing_at is null limit 1').fetchone()[0])")
+  SEED=$(bash "$ROOT/scripts/mariadb_exec.sh" "SELECT id FROM tracks WHERE missing_at IS NULL LIMIT 1")
 fi
 if [[ -z "$SEED" || "$SEED" == "0" ]]; then
   echo "no seed track in catalog" >&2

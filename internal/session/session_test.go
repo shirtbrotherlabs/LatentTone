@@ -7,21 +7,17 @@ package session_test
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	"github.com/shirtbrotherlabs/LatentTone/internal/affinity"
 	"github.com/shirtbrotherlabs/LatentTone/internal/db"
+	"github.com/shirtbrotherlabs/LatentTone/internal/dbtest"
 	"github.com/shirtbrotherlabs/LatentTone/internal/session"
 )
 
 func seedDB(t *testing.T) (*db.DB, int64, int64, int64, int64, int64) {
 	t.Helper()
-	dir := t.TempDir()
-	catalog, err := db.Open(filepath.Join(dir, "t.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	catalog, _ := dbtest.Open(t)
 	u, err := catalog.CreateUser("u1", "hash")
 	if err != nil {
 		t.Fatal(err)

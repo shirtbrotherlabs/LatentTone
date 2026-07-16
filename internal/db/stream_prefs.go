@@ -84,10 +84,10 @@ func (d *DB) UpsertStreamPrefs(p StreamPrefs) (StreamPrefs, error) {
 	_, err := d.SQL.Exec(`
 INSERT INTO user_stream_prefs (user_id, stream_format, bitrate_kbps, updated_at)
 VALUES (?, ?, ?, ?)
-ON CONFLICT(user_id) DO UPDATE SET
-  stream_format = excluded.stream_format,
-  bitrate_kbps = excluded.bitrate_kbps,
-  updated_at = excluded.updated_at`,
+ON DUPLICATE KEY UPDATE
+  stream_format = VALUES(stream_format),
+  bitrate_kbps = VALUES(bitrate_kbps),
+  updated_at = VALUES(updated_at)`,
 		p.UserID, p.StreamFormat, p.BitrateKbps, now,
 	)
 	if err != nil {

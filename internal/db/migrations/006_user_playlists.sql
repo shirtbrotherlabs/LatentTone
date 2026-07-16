@@ -1,44 +1,28 @@
 -- Copyright (C) 2026 martinsah
 -- SPDX-License-Identifier: GPL-3.0-only
--- Phase 3C: user-owned playlists (kind=user) with ownership + nullable seed.
+-- Phase 3C: user-owned playlists (kind=user) with ownership + nullable seed (MariaDB).
+--
+-- MariaDB supports in-place ALTER TABLE, so this skips SQLite's
+-- rebuild-and-copy dance (playlist_tracks_bak / playlists_new) from the
+-- original migration — existing rows are preserved automatically.
 
--- Preserve membership rows across playlists rebuild (seed_track_id → nullable).
-CREATE TABLE playlist_tracks_bak AS SELECT * FROM playlist_tracks;
+-- seed_track_id becomes optional for kind=user playlists; the original FK
+-- (ON DELETE CASCADE) is replaced with ON DELETE SET NULL.
+ALTER TABLE playlists DROP FOREIGN KEY fk_playlists_seed;
+ALTER TABLE playlists MODIFY COLUMN seed_track_id BIGINT NULL;
+ALTER TABLE playlists ADD CONSTRAINT fk_playlists_seed
+  FOREIGN KEY (seed_track_id) REFERENCES tracks (id) ON DELETE SET NULL;
 
-DROP TABLE playlist_tracks;
+ALTER TABLE playlists ADD COLUMN IF NOT EXISTS user_id BIGINT NULL AFTER seed_track_id;
+ALTER TABLE playlists ADD COLUMN IF NOT EXISTS updated_at VARCHAR(32) NULL AFTER created_at;
+-- Backfill updated_at for pre-existing rows (idempotent; only touches NULLs).
+UPDATE playlists SET updated_at = created_at WHERE updated_at IS NULL;
+ALTER TABLE playlists MODIFY COLUMN updated_at VARCHAR(32) NOT NULL;
+ALTER TABLE playlists MODIFY COLUMN length INTEGER NOT NULL DEFAULT 0;
 
-CREATE TABLE playlists_new (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    name            TEXT    NOT NULL,
-    seed_track_id   INTEGER REFERENCES tracks(id) ON DELETE SET NULL,
-    user_id         INTEGER REFERENCES users(id) ON DELETE CASCADE,
-    kind            TEXT    NOT NULL DEFAULT 'neighbor',
-    length          INTEGER NOT NULL DEFAULT 0,
-    created_at      TEXT    NOT NULL,
-    updated_at      TEXT    NOT NULL,
-    CHECK (kind <> 'user' OR user_id IS NOT NULL)
-);
+ALTER TABLE playlists ADD CONSTRAINT fk_playlists_user
+  FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE;
+ALTER TABLE playlists ADD CONSTRAINT chk_playlists_user_kind
+  CHECK (kind <> 'user' OR user_id IS NOT NULL);
 
-INSERT INTO playlists_new (id, name, seed_track_id, user_id, kind, length, created_at, updated_at)
-SELECT id, name, seed_track_id, NULL, kind, length, created_at, created_at FROM playlists;
-
-DROP TABLE playlists;
-ALTER TABLE playlists_new RENAME TO playlists;
-
-CREATE TABLE playlist_tracks (
-    playlist_id     INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
-    position        INTEGER NOT NULL,
-    track_id        INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
-    score           REAL,
-    PRIMARY KEY (playlist_id, position)
-);
-
-INSERT INTO playlist_tracks (playlist_id, position, track_id, score)
-SELECT playlist_id, position, track_id, score FROM playlist_tracks_bak;
-
-DROP TABLE playlist_tracks_bak;
-
-CREATE INDEX IF NOT EXISTS idx_playlists_seed ON playlists(seed_track_id);
-CREATE INDEX IF NOT EXISTS idx_playlists_created ON playlists(created_at);
-CREATE INDEX IF NOT EXISTS idx_playlists_user_updated ON playlists(user_id, updated_at);
-CREATE INDEX IF NOT EXISTS idx_playlist_tracks_track ON playlist_tracks(track_id);
+CREATE INDEX IF NOT EXISTS idx_playlists_user_updated ON playlists (user_id, updated_at);

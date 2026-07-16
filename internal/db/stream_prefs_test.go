@@ -6,19 +6,14 @@
 package db_test
 
 import (
-	"path/filepath"
 	"testing"
 
 	"github.com/shirtbrotherlabs/LatentTone/internal/db"
+	"github.com/shirtbrotherlabs/LatentTone/internal/dbtest"
 )
 
 func TestStreamPrefsPersist(t *testing.T) {
-	dir := t.TempDir()
-	catalog, err := db.Open(filepath.Join(dir, "t.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = catalog.Close() })
+	catalog, _ := dbtest.Open(t)
 
 	u, err := catalog.CreateUser("streamuser", "hash")
 	if err != nil {

@@ -41,6 +41,19 @@ function isBenignPlaybackError(msg: string): boolean {
   );
 }
 
+/** Browser TypeError / proxy blips from session poll — clear once connectivity returns. */
+function isTransientNetworkError(msg: string | null | undefined): boolean {
+  if (!msg) return false;
+  return (
+    /^Failed to fetch$/i.test(msg) ||
+    /^NetworkError/i.test(msg) ||
+    /network error/i.test(msg) ||
+    /Load failed/i.test(msg) ||
+    msg === "poll failed" ||
+    /couldn't reach server/i.test(msg)
+  );
+}
+
 type PlayerState = {
   status: SessionStatus | null;
   nowTrack: CatalogTrack | null;
@@ -315,16 +328,31 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const id = status?.id;
     if (!id || status?.status === "stopped") return;
+    let cancelled = false;
+    let failStreak = 0;
     const tick = async () => {
       try {
         const s = await api.getSession(id);
+        if (cancelled) return;
+        failStreak = 0;
         setStatus(s);
+        // Poll used to leave "Failed to fetch" stuck after brief outages (rebuilds, 502s).
+        setError((prev) => (isTransientNetworkError(prev) ? null : prev));
       } catch (e) {
-        setError(e instanceof Error ? e.message : "poll failed");
+        if (cancelled) return;
+        const msg = e instanceof Error ? e.message : "poll failed";
+        if (msg === "AbortError" || /aborted/i.test(msg)) return;
+        failStreak += 1;
+        // Ignore a single blip (HTTP/2 cancel / momentary proxy hiccup).
+        if (failStreak < 2) return;
+        setError(isTransientNetworkError(msg) ? "couldn't reach server" : msg);
       }
     };
     const t = window.setInterval(() => void tick(), 2000);
-    return () => window.clearInterval(t);
+    return () => {
+      cancelled = true;
+      window.clearInterval(t);
+    };
   }, [status?.id, status?.status]);
 
   useEffect(() => {

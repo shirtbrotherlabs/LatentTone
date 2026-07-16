@@ -8,15 +8,18 @@ package meta
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/shirtbrotherlabs/LatentTone/internal/config"
 )
 
 // Config is metadata.yaml for the embedding tool.
 type Config struct {
 	LibraryRoot     string            `yaml:"library_root"`
-	DatabasePath    string            `yaml:"database_path"`
+	DatabaseDSN     string            `yaml:"database_dsn"`
 	Extractors      []string          `yaml:"extractors"`
 	ModelVersions   map[string]string `yaml:"model_versions"`
 	Concurrency     int               `yaml:"concurrency"`
@@ -49,6 +52,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse metadata config: %w", err)
 	}
 	c.applyDefaults()
+	c.applyEnv()
 	return &c, nil
 }
 
@@ -56,8 +60,8 @@ func (c *Config) applyDefaults() {
 	if c.LibraryRoot == "" {
 		c.LibraryRoot = "/music"
 	}
-	if c.DatabasePath == "" {
-		c.DatabasePath = "/data/latenttone.db"
+	if c.DatabaseDSN == "" {
+		c.DatabaseDSN = config.DefaultDatabaseDSN
 	}
 	if len(c.Extractors) == 0 {
 		c.Extractors = []string{"catalog", "filesig"}
@@ -109,6 +113,15 @@ func (c *Config) applyDefaults() {
 	}
 	if c.MusiCNNMeta == "" {
 		c.MusiCNNMeta = "/models/musicnn/msd-musicnn-1.json"
+	}
+}
+
+// applyEnv overlays DATABASE_DSN / LATENTTONE_DATABASE_DSN.
+func (c *Config) applyEnv() {
+	if v := strings.TrimSpace(os.Getenv("DATABASE_DSN")); v != "" {
+		c.DatabaseDSN = v
+	} else if v := strings.TrimSpace(os.Getenv("LATENTTONE_DATABASE_DSN")); v != "" {
+		c.DatabaseDSN = v
 	}
 }
 

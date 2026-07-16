@@ -31,7 +31,7 @@ const (
 // InsertTrackFeedback records an explicit signal.
 func (d *DB) InsertTrackFeedback(userID, trackID int64, signal, sessionID string) error {
 	_, err := d.SQL.Exec(
-		`INSERT INTO track_feedback (user_id, track_id, signal, session_id, created_at) VALUES (?, ?, ?, ?, ?)`,
+		"INSERT INTO track_feedback (user_id, track_id, `signal`, session_id, created_at) VALUES (?, ?, ?, ?, ?)",
 		userID, trackID, signal, NullString(sessionID), Now(),
 	)
 	return err
@@ -60,7 +60,7 @@ func (d *DB) UpsertAffinity(userID, trackID int64, delta float64) (float64, erro
 	}
 	_, err = d.SQL.Exec(`
 INSERT INTO user_track_affinity (user_id, track_id, score, updated_at) VALUES (?, ?, ?, ?)
-ON CONFLICT(user_id, track_id) DO UPDATE SET score = excluded.score, updated_at = excluded.updated_at`,
+ON DUPLICATE KEY UPDATE score = VALUES(score), updated_at = VALUES(updated_at)`,
 		userID, trackID, cur, now,
 	)
 	return cur, err
@@ -85,7 +85,7 @@ func (d *DB) AddSkip(userID, trackID int64, scope, sessionKey string) error {
 		scope = SkipScopeLibrary
 	}
 	_, err := d.SQL.Exec(`
-INSERT OR IGNORE INTO user_track_skips (user_id, track_id, scope, session_key, created_at)
+INSERT IGNORE INTO user_track_skips (user_id, track_id, scope, session_key, created_at)
 VALUES (?, ?, ?, ?, ?)`,
 		userID, trackID, scope, sessionKey, Now(),
 	)
@@ -144,19 +144,19 @@ func (d *DB) LatestLikeDislikeSignals(userID int64, trackIDs []int64) (map[int64
 		placeholders[i] = "?"
 		args = append(args, id)
 	}
-	q := `
-SELECT tf.track_id, tf.signal
+	q := "" + `
+SELECT tf.track_id, tf.` + "`signal`" + `
 FROM track_feedback tf
 INNER JOIN (
   SELECT track_id, MAX(created_at) AS max_at
   FROM track_feedback
   WHERE user_id = ?
-    AND signal IN ('like', 'dislike')
+    AND ` + "`signal`" + ` IN ('like', 'dislike')
     AND track_id IN (` + strings.Join(placeholders, ",") + `)
   GROUP BY track_id
 ) latest ON latest.track_id = tf.track_id AND latest.max_at = tf.created_at
 WHERE tf.user_id = ?
-  AND tf.signal IN ('like', 'dislike')`
+  AND tf.` + "`signal`" + ` IN ('like', 'dislike')`
 	args = append(args, userID)
 	rows, err := d.SQL.Query(q, args...)
 	if err != nil {

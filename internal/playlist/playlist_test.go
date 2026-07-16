@@ -7,19 +7,14 @@ package playlist
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	"github.com/shirtbrotherlabs/LatentTone/internal/db"
+	"github.com/shirtbrotherlabs/LatentTone/internal/dbtest"
 )
 
 func TestCreateFromSeed(t *testing.T) {
-	dir := t.TempDir()
-	catalog, err := db.Open(filepath.Join(dir, "t.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer catalog.Close()
+	catalog, _ := dbtest.Open(t)
 
 	mk := func(path, title string, vec []float32) int64 {
 		tn := 1

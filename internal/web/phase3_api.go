@@ -6,9 +6,7 @@
 package web
 
 import (
-	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -33,8 +31,7 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body credBody
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	u, sess, err := s.Auth.Register(body.Username, body.Password)
@@ -59,8 +56,7 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body credBody
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	u, sess, err := s.Auth.Login(body.Username, body.Password, r.RemoteAddr)
@@ -115,8 +111,7 @@ func (s *Server) handleAuthPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body passwordBody
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	if err := s.Auth.ChangePassword(u.ID, body.CurrentPassword, body.NewPassword); err != nil {
@@ -206,7 +201,10 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFrom(r.Context())
 	var body createSessionBody
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil || body.SeedTrackID <= 0 {
+	if !decodeJSONBody(w, r, &body) {
+		return
+	}
+	if body.SeedTrackID <= 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "seed_track_id required"})
 		return
 	}
@@ -284,7 +282,10 @@ func (s *Server) postFeedback(w http.ResponseWriter, r *http.Request, sessionID 
 		return
 	}
 	var body feedbackBody
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil || body.Signal == "" {
+	if !decodeJSONBody(w, r, &body) {
+		return
+	}
+	if body.Signal == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "signal required"})
 		return
 	}
@@ -343,7 +344,10 @@ func (s *Server) postQueueInject(w http.ResponseWriter, r *http.Request, session
 		return
 	}
 	var body queueInjectBody
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil || body.TrackID <= 0 {
+	if !decodeJSONBody(w, r, &body) {
+		return
+	}
+	if body.TrackID <= 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "track_id required"})
 		return
 	}

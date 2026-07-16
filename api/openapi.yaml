@@ -5,10 +5,13 @@ info:
     Phase 2+3 HTTP product surface for LatentTone (auth, sessions, stream/HLS,
     feedback, neighbor playlists, Phase 3C user playlists, embed status).
 
-    **Try it out:** call `POST /api/v1/auth/login` (or register), copy the
-    response `token`, click **Authorize**, and paste it as a Bearer token.
-    The HTTP-only cookie `lt_session` works for same-origin browser clients but
-    is not the Swagger UI default.
+    **Try it out (Swagger / scripts):** call `POST /api/v1/auth/login` (or register),
+    copy the response `token`, click **Authorize**, and paste it as a Bearer token.
+    The product SPA uses the HttpOnly cookie `lt_session` only (same-origin; no
+    Bearer in JavaScript). Bearer remains supported for non-browser clients.
+
+    SPA and API share one origin (`/app/` + `/api/v1/`) — no CORS. Do not add
+    `Access-Control-Allow-Origin: *`.
 
     Swagger UI is flag-gated (`enable_api_docs`) and is **not** a substitute for
     Phase 3 stream-smoke Gates A–D or `/dev/stream`.
@@ -1004,7 +1007,7 @@ paths:
       tags: [scan]
       summary: Start catalog library scan
       description: |
-        Starts a full library reconcile (tags → SQLite catalog). **Admin only.**
+        Starts a full library reconcile (tags → MariaDB catalog). **Admin only.**
         Returns 409 if a scan is already running. There is no stop API.
       operationId: scanStart
       security:

@@ -13,7 +13,7 @@ const DEPS = [
   { name: "FFmpeg", note: "HLS packaging + progressive remux" },
   { name: "Essentia", note: "Acoustic feature extraction (AGPL subprocess)" },
   { name: "LanceDB", note: "On-disk vector index" },
-  { name: "go-sqlite (glebarez)", note: "Catalog database" },
+  { name: "MariaDB", note: "Catalog database" },
   { name: "ONNX Runtime / TFLite", note: "MusiCNN + YAMNet embeddings" },
   { name: "Swagger UI", note: "Optional /api/docs explorer" },
 ];

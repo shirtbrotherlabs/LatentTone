@@ -1,7 +1,7 @@
 // Copyright (C) 2026 martinsah
 // SPDX-License-Identifier: GPL-3.0-only
 // Author: martinsah
-// Date: 2026-07-15
+// Date: 2026-07-16
 
 package db
 
@@ -9,58 +9,81 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
-	_ "github.com/glebarez/go-sqlite"
+	"github.com/go-sql-driver/mysql"
 )
 
 //go:embed migrations/*.sql
 var migrationFS embed.FS
 
-// DB wraps the catalog SQLite connection.
+// DB wraps the catalog MariaDB connection.
 type DB struct {
 	SQL     *sql.DB
 	writeMu sync.Mutex
 }
 
-// Open opens (or creates) the catalog database, enables WAL, and applies migrations.
-func Open(path string) (*DB, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, fmt.Errorf("create db dir: %w", err)
-	}
-	// WAL allows concurrent readers; busy_timeout retries instead of failing
-	// immediately when embed/scan writers briefly lock the DB.
-	sqlDB, err := sql.Open("sqlite", path+"?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+// Open connects to MariaDB at dsn, applies migrations, and returns the handle.
+//
+// dsn is a github.com/go-sql-driver/mysql DSN, e.g.
+//
+//	latenttone:password@tcp(mariadb:3306)/latenttone?parseTime=true&charset=utf8mb4&collation=utf8mb4_unicode_ci
+//
+// multiStatements and parseTime are forced on regardless of the caller-supplied
+// DSN: migrations apply several DDL statements per file in one Exec, and the
+// catalog reads timestamps as RFC3339 text (parseTime only matters if a caller
+// later introduces native DATETIME columns).
+func Open(dsn string) (*DB, error) {
+	cfg, err := mysql.ParseDSN(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite: %w", err)
+		return nil, fmt.Errorf("parse database_dsn: %w", err)
 	}
-	// Multiple conns let catalog reads proceed while embed workers write.
-	// SQLite still serializes writers under WAL; keep the pool modest.
-	sqlDB.SetMaxOpenConns(8)
-	sqlDB.SetMaxIdleConns(8)
-	sqlDB.SetConnMaxLifetime(0)
-	if _, err := sqlDB.Exec(`PRAGMA foreign_keys = ON;`); err != nil {
+	cfg.MultiStatements = true
+	cfg.ParseTime = true
+	if cfg.Params == nil {
+		cfg.Params = map[string]string{}
+	}
+	if _, ok := cfg.Params["charset"]; !ok {
+		cfg.Params["charset"] = "utf8mb4"
+	}
+
+	sqlDB, err := sql.Open("mysql", cfg.FormatDSN())
+	if err != nil {
+		return nil, fmt.Errorf("open mariadb: %w", err)
+	}
+	// Modest pool: browse/scan/embed are separate Compose services/processes,
+	// each with their own *DB; MariaDB (unlike SQLite) serializes writers at
+	// the row level, so this is about connection reuse, not write contention.
+	sqlDB.SetMaxOpenConns(16)
+	sqlDB.SetMaxIdleConns(16)
+	sqlDB.SetConnMaxLifetime(time.Hour)
+
+	if err := pingWithRetry(sqlDB, 10, 500*time.Millisecond); err != nil {
 		_ = sqlDB.Close()
-		return nil, fmt.Errorf("pragma: %w", err)
+		return nil, fmt.Errorf("connect mariadb: %w", err)
 	}
-	if _, err := sqlDB.Exec(`PRAGMA journal_mode = WAL;`); err != nil {
-		_ = sqlDB.Close()
-		return nil, fmt.Errorf("wal: %w", err)
-	}
-	if _, err := sqlDB.Exec(`PRAGMA busy_timeout = 5000;`); err != nil {
-		_ = sqlDB.Close()
-		return nil, fmt.Errorf("busy_timeout: %w", err)
-	}
+
 	d := &DB{SQL: sqlDB}
 	if err := d.migrate(); err != nil {
 		_ = sqlDB.Close()
 		return nil, err
 	}
 	return d, nil
+}
+
+// pingWithRetry tolerates MariaDB briefly refusing connections right after its
+// healthcheck reports healthy (Compose depends_on races on cold start).
+func pingWithRetry(sqlDB *sql.DB, attempts int, delay time.Duration) error {
+	var err error
+	for i := 0; i < attempts; i++ {
+		if err = sqlDB.Ping(); err == nil {
+			return nil
+		}
+		time.Sleep(delay)
+	}
+	return err
 }
 
 // Close closes the database.
@@ -74,9 +97,10 @@ func (d *DB) Close() error {
 func (d *DB) migrate() error {
 	if _, err := d.SQL.Exec(`
 CREATE TABLE IF NOT EXISTS schema_migrations (
-    version INTEGER PRIMARY KEY,
-    applied_at TEXT NOT NULL
-);`); err != nil {
+    version BIGINT NOT NULL,
+    applied_at VARCHAR(32) NOT NULL,
+    PRIMARY KEY (version)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`); err != nil {
 		return fmt.Errorf("schema_migrations: %w", err)
 	}
 
@@ -104,6 +128,11 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		if err != nil {
 			return err
 		}
+		// Note: DDL in MariaDB/InnoDB implicitly commits as each statement runs,
+		// so this transaction does not make a whole migration file atomic the
+		// way SQLite's did. Every statement in these migrations is written to be
+		// safely re-run (IF NOT EXISTS / IF EXISTS) so a partial failure followed
+		// by a retry does not error on already-applied DDL within the same file.
 		tx, err := d.SQL.Begin()
 		if err != nil {
 			return err

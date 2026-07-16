@@ -220,7 +220,7 @@ SELECT pt.position, pt.track_id, pt.score,
        t.duration_ms, t.bitrate_kbps, t.sample_rate_hz, t.channels, t.format, COALESCE(t.year, al.year),
        t.comment, t.missing_at,
        COALESCE(al.title, ''), COALESCE(a.name, ''), al.cover_path,
-       COALESCE((SELECT GROUP_CONCAT(g.name, '|') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id), '')
+       COALESCE((SELECT GROUP_CONCAT(g.name SEPARATOR '|') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id), '')
 FROM playlist_tracks pt
 JOIN tracks t ON t.id = pt.track_id
 LEFT JOIN albums al ON al.id = t.album_id

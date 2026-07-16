@@ -21,8 +21,11 @@ RUN CGO_ENABLED=0 go build -mod=vendor -buildvcs=false -o /out/latenttone ./cmd/
 # Runtime: Essentia base + Python 3.11 venv (LanceDB, ONNX Runtime, TFLite) + checksum-pinned ML models
 FROM essentia
 COPY scripts/fetch_ml_models.sh /tmp/fetch_ml_models.sh
+# sqlite3 here is only the CLI, shelled out to by `latenttone migrate-sqlite`
+# (the one-shot legacy-catalog importer) — not a Go module dependency; the
+# app itself is MariaDB-only (go.mod has no SQLite driver).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl ffmpeg \
+      ca-certificates curl ffmpeg sqlite3 \
     && rm -rf /var/lib/apt/lists/* \
     && curl -LsSf https://astral.sh/uv/0.6.14/install.sh | sh \
     && export PATH="/root/.local/bin:$PATH" \

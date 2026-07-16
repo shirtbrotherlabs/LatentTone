@@ -3,23 +3,20 @@
 // Author: martinsah
 // Date: 2026-07-15
 
-package db
+package db_test
 
 import (
-	"path/filepath"
 	"testing"
+
+	"github.com/shirtbrotherlabs/LatentTone/internal/db"
+	"github.com/shirtbrotherlabs/LatentTone/internal/dbtest"
 )
 
 func TestVectorQueueAndFeatures(t *testing.T) {
-	dir := t.TempDir()
-	d, err := Open(filepath.Join(dir, "t.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer d.Close()
+	d, _ := dbtest.Open(t)
 
 	tn := 1
-	id, err := d.UpsertTrack(TrackInput{
+	id, err := d.UpsertTrack(db.TrackInput{
 		Path: "A/B/c.mp3", Title: "Song", Album: "Alb", AlbumArtist: "Art",
 		Artists: []string{"Art"}, Format: "mp3", TrackNumber: &tn, FileMtime: 10, FileSize: 100,
 	})
@@ -43,7 +40,7 @@ func TestVectorQueueAndFeatures(t *testing.T) {
 		t.Fatal(err)
 	}
 	v, err := d.GetTrackVector(id)
-	if err != nil || v == nil || v.Status != VecReady || len(v.Embedding) != 3 {
+	if err != nil || v == nil || v.Status != db.VecReady || len(v.Embedding) != 3 {
 		t.Fatalf("%+v err=%v", v, err)
 	}
 	feats, err := d.ListTrackFeatures(id)
@@ -64,7 +61,7 @@ func TestVectorQueueAndFeatures(t *testing.T) {
 		t.Fatal(err)
 	}
 	v, _ = d.GetTrackVector(id)
-	if v.Status != VecPending {
+	if v.Status != db.VecPending {
 		t.Fatalf("want pending after stale, got %s", v.Status)
 	}
 }

@@ -15,8 +15,8 @@ Catalog of third-party dependencies used by LatentTone. Every added or upgraded 
 | bogem/id3v2 | MP3 embedded APIC artwork extraction | MIT | https://github.com/bogem/id3v2 | v2.1.4 | `vendor/github.com/bogem/id3v2/v2` |
 | dhowden/tag | MP3/MP4/OGG/FLAC metadata reading | BSD-2-Clause | https://github.com/dhowden/tag | pinned commit `3d75831295e8`¹ | `vendor/github.com/dhowden/tag` |
 | fsnotify/fsnotify | Filesystem watcher for incremental scan | BSD-3-Clause | https://github.com/fsnotify/fsnotify | v1.8.0 | `vendor/github.com/fsnotify/fsnotify` |
-| glebarez/go-sqlite | Pure-Go `database/sql` SQLite driver | MIT | https://github.com/glebarez/go-sqlite | v1.22.0 | `vendor/github.com/glebarez/go-sqlite` |
 | go-flac/go-flac | FLAC container parsing | Apache-2.0 | https://github.com/go-flac/go-flac | v2.0.4 | `vendor/github.com/go-flac/go-flac/v2` |
+| go-sql-driver/mysql | `database/sql` driver for MariaDB (catalog store; SQLite hard cutover) | MPL-2.0 | https://github.com/go-sql-driver/mysql | v1.9.3 | `vendor/github.com/go-sql-driver/mysql` |
 | tcolgate/mp3 | Accurate MP3 frame-duration calculation without audio decoding | MIT | https://github.com/tcolgate/mp3 | pinned commit `e79c5a46d300`¹ | `vendor/github.com/tcolgate/mp3` |
 | go-yaml/yaml | `scanner.yaml` config parsing (`gopkg.in/yaml.v3`) | MIT / Apache-2.0 | https://github.com/go-yaml/yaml | v3.0.1 | `vendor/gopkg.in/yaml.v3` |
 | golang.org/x/crypto | argon2id password KDF (ADR-005) | BSD-3-Clause | https://github.com/golang/crypto | v0.31.0 | `vendor/golang.org/x/crypto` |
@@ -48,7 +48,7 @@ Fonts loaded at runtime from Google Fonts (Instrument Serif, Sora) for the produ
 
 | Name | Via | Notes |
 |------|-----|--------|
-| modernc.org/sqlite | glebarez/go-sqlite | Pure-Go SQLite engine (versioned with the glebarez release); sources mirrored under `vendor/modernc.org/` |
+| filippo.io/edwards25519 | go-sql-driver/mysql | Ed25519 support for MariaDB's `ed25519` auth plugin; BSD-3-Clause |
 | golang.org/x/sys | fsnotify / x/crypto | Standard Go x/sys support package |
 
 Rebuild vendor after dependency changes:
@@ -64,6 +64,8 @@ Phase 2 default extractors `catalog` / `filesig` add **no new third-party Go pac
 
 | Name | Purpose | License | Source | Pin | Notes |
 |------|---------|---------|--------|-----|-------|
+| MariaDB | Catalog / user-state relational store (replaces SQLite) | GPL-2.0 (server) | https://mariadb.org / `docker.io/library/mariadb` | image tag `11.4` | Compose service `mariadb`; data volume `${MARIADB_DATA}:/var/lib/mysql` |
+| sqlite3 (CLI) | Read-only legacy-catalog reader for `latenttone migrate-sqlite` (one-shot SQLite→MariaDB importer) | Public domain | Debian/Ubuntu package via Essentia image `apt` | image distro pin | CLI only, shelled out to by `cmd/latenttone/migrate_sqlite.go`; **no** Go SQLite driver — the app binary itself has zero SQLite dependency |
 | FFmpeg | HLS segment packaging + progressive remux (ADR-006) | LGPL/GPL components | Debian/Ubuntu package via Essentia image `apt` | image distro pin | Already installed in Dockerfile (`apt-get install ffmpeg`); CLI only |
 | MTG Essentia | `essentia_streaming_extractor_music` CLI (AGPL subprocess) | AGPL-3.0 | https://github.com/MTG/essentia (`v2.1_beta5`) via `ghcr.io/mtg/essentia` | digest `sha256:a8131b97632ffeabceba22249f4767bbeddba9b40172199b5ce42242b4649536` | Copied via Docker `FROM`; not linked into Go |
 | lancedb (Python) | On-disk vector index upsert/search | Apache-2.0 | https://github.com/lancedb/lancedb | GitHub `python-v0.34.0` / PyPI `lancedb==0.34.0` | Installed into `/opt/latenttone-venv`; invoked by `scripts/lance_helper.py` |

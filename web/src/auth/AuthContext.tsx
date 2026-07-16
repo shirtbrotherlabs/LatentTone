@@ -2,7 +2,7 @@
  * Copyright (C) 2026 martinsah
  * SPDX-License-Identifier: GPL-3.0-only
  * Author: martinsah
- * Date: 2026-07-15
+ * Date: 2026-07-16
  */
 
 import {
@@ -14,7 +14,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { ApiError, api, setStoredToken } from "../api/client";
+import { ApiError, api } from "../api/client";
 import type { User } from "../api/types";
 
 type AuthState = {
@@ -28,6 +28,15 @@ type AuthState = {
 
 const AuthContext = createContext<AuthState | null>(null);
 
+/** Drop legacy XSS-stealable Bearer copies from earlier SPA builds. */
+function clearLegacyBearer() {
+  try {
+    sessionStorage.removeItem("lt_bearer");
+  } catch {
+    /* ignore */
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -39,7 +48,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
         setUser(null);
-        setStoredToken(null);
       } else {
         setUser(null);
       }
@@ -49,18 +57,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    clearLegacyBearer();
     void refresh();
   }, [refresh]);
 
   const login = useCallback(async (username: string, password: string) => {
     const res = await api.login(username, password);
-    setStoredToken(res.token);
+    clearLegacyBearer();
     setUser(res.user);
   }, []);
 
   const register = useCallback(async (username: string, password: string) => {
     const res = await api.register(username, password);
-    setStoredToken(res.token);
+    clearLegacyBearer();
     setUser(res.user);
   }, []);
 
@@ -68,7 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await api.logout();
     } finally {
-      setStoredToken(null);
+      clearLegacyBearer();
       setUser(null);
     }
   }, []);

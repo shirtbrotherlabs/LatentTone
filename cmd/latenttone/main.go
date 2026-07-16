@@ -43,6 +43,8 @@ func main() {
 		os.Exit(runServe(os.Args[2:]))
 	case "embed":
 		os.Exit(runEmbed(os.Args[2:]))
+	case "migrate-sqlite":
+		os.Exit(migrateSqlite(os.Args[2:]))
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -56,9 +58,12 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `LatentTone — library catalog, browse UI, and feature embedding
 
 Usage:
-  latenttone scan   [--config scanner.yaml]
-  latenttone serve  [--config scanner.yaml] [--meta metadata.yaml] [--scan-on-start]
-  latenttone embed  [--meta metadata.yaml] [--stop]
+  latenttone scan            [--config scanner.yaml]
+  latenttone serve           [--config scanner.yaml] [--meta metadata.yaml] [--scan-on-start]
+  latenttone embed           [--meta metadata.yaml] [--stop]
+  latenttone migrate-sqlite  [--source /data/latenttone.db] [--config scanner.yaml] [--yes]
+                             one-shot import of a legacy SQLite catalog into MariaDB
+                             (dry run by default; requires the sqlite3 CLI on PATH)
 
 `)
 }
@@ -76,7 +81,7 @@ func runScan(args []string) int {
 		log.Printf("library root: %v", err)
 		return 1
 	}
-	catalog, err := db.Open(cfg.DatabasePath)
+	catalog, err := db.Open(cfg.DatabaseDSN)
 	if err != nil {
 		log.Println(err)
 		return 1
@@ -117,7 +122,7 @@ func runEmbed(args []string) int {
 		log.Printf("library root: %v", err)
 		return 1
 	}
-	catalog, err := db.Open(mcfg.DatabasePath)
+	catalog, err := db.Open(mcfg.DatabaseDSN)
 	if err != nil {
 		log.Println(err)
 		return 1
@@ -154,8 +159,8 @@ func runServe(args []string) int {
 		return 1
 	}
 	// Prefer scanner DB/library paths as share with browse; override meta DB from scanner if same compose volume.
-	if cfg.DatabasePath != "" {
-		mcfg.DatabasePath = cfg.DatabasePath
+	if cfg.DatabaseDSN != "" {
+		mcfg.DatabaseDSN = cfg.DatabaseDSN
 	}
 	if cfg.LibraryRoot != "" {
 		mcfg.LibraryRoot = cfg.LibraryRoot
@@ -165,7 +170,7 @@ func runServe(args []string) int {
 		log.Printf("library root: %v", err)
 		return 1
 	}
-	catalog, err := db.Open(cfg.DatabasePath)
+	catalog, err := db.Open(cfg.DatabaseDSN)
 	if err != nil {
 		log.Println(err)
 		return 1

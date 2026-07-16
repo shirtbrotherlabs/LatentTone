@@ -3,26 +3,22 @@
 // Author: martinsah
 // Date: 2026-07-15
 
-package db
+package db_test
 
 import (
-	"path/filepath"
 	"testing"
+
+	"github.com/shirtbrotherlabs/LatentTone/internal/db"
+	"github.com/shirtbrotherlabs/LatentTone/internal/dbtest"
 )
 
 func TestOpenMigrateUpsert(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.db")
-	d, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer d.Close()
+	d, _ := dbtest.Open(t)
 
 	tn := 1
 	year := 1979
 	ms := int64(208000)
-	id, err := d.UpsertTrack(TrackInput{
+	id, err := d.UpsertTrack(db.TrackInput{
 		Path:        "AC_DC/Highway to Hell/01 - Highway to Hell.mp3",
 		FileMtime:   1,
 		FileSize:    100,
@@ -45,7 +41,7 @@ func TestOpenMigrateUpsert(t *testing.T) {
 		t.Fatal("expected id")
 	}
 
-	batchResults, err := d.UpsertTracks([]TrackInput{
+	batchResults, err := d.UpsertTracks([]db.TrackInput{
 		{
 			Path:        "AC_DC/Highway to Hell/02 - Girls Got Rhythm.mp3",
 			FileMtime:   1,
@@ -78,7 +74,7 @@ func TestOpenMigrateUpsert(t *testing.T) {
 		t.Fatalf("batch upsert: %+v", batchResults)
 	}
 
-	cached := TrackInput{
+	cached := db.TrackInput{
 		Path:      "AC_DC/Highway to Hell/01 - Highway to Hell.mp3",
 		FileMtime: 1,
 		FileSize:  100,
@@ -93,7 +89,7 @@ func TestOpenMigrateUpsert(t *testing.T) {
 	}
 
 	// Idempotent second upsert
-	id2, err := d.UpsertTrack(TrackInput{
+	id2, err := d.UpsertTrack(db.TrackInput{
 		Path:        "AC_DC/Highway to Hell/01 - Highway to Hell.mp3",
 		FileMtime:   2,
 		FileSize:    101,

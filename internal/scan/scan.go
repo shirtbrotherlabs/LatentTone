@@ -63,7 +63,7 @@ func (s *Scanner) Full(trigger string) (*Result, error) {
 		writerWG sync.WaitGroup
 	)
 
-	// Single writer: drain metadata results into SQLite batches.
+	// Single writer: drain metadata results into catalog batches.
 	writerWG.Add(1)
 	go func() {
 		defer writerWG.Done()

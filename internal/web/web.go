@@ -189,7 +189,7 @@ func (s *Server) Handler() http.Handler {
 	if s.Cfg.EnableAPIDocs {
 		apidocs.Register(mux, api.OpenAPIYAML)
 	}
-	return s.Auth.Middleware(mux)
+	return withSecurityHeaders(s.Auth.Middleware(mux))
 }
 
 // mountSPA serves the Phase 4 product client under /app/ when spa_root exists.
@@ -514,12 +514,8 @@ func (s *Server) handleAPIPlaylist(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiCreatePlaylist(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
 	var body createPlaylistBody
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&body); err != nil {
-		writeJSONError(w, 400, "invalid JSON body")
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	if body.SeedTrackID <= 0 {

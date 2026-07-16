@@ -1,42 +1,46 @@
--- Phase 2: vector queue, feature payloads, embed runs
+-- Phase 2: vector queue, feature payloads, embed runs (MariaDB)
 
-CREATE TABLE track_vectors (
-    track_id            INTEGER PRIMARY KEY REFERENCES tracks (id) ON DELETE CASCADE,
-    status              TEXT    NOT NULL,
-    extractor_set       TEXT    NOT NULL,
+CREATE TABLE IF NOT EXISTS track_vectors (
+    track_id            BIGINT       NOT NULL,
+    status              VARCHAR(32)  NOT NULL,
+    extractor_set       VARCHAR(255) NOT NULL,
     model_versions      TEXT,
-    lancedb_id          TEXT,
+    lancedb_id          VARCHAR(64),
     vector_dim          INTEGER,
-    embedding_blob      BLOB,
+    embedding_blob      LONGBLOB,
     error_message       TEXT,
-    audio_mtime_at_run  INTEGER,
-    created_at          TEXT    NOT NULL,
-    updated_at          TEXT    NOT NULL
-);
+    audio_mtime_at_run  BIGINT,
+    created_at          VARCHAR(32)  NOT NULL,
+    updated_at          VARCHAR(32)  NOT NULL,
+    PRIMARY KEY (track_id),
+    CONSTRAINT fk_track_vectors_track FOREIGN KEY (track_id) REFERENCES tracks (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE INDEX idx_track_vectors_status ON track_vectors (status);
+CREATE INDEX IF NOT EXISTS idx_track_vectors_status ON track_vectors (status);
 
-CREATE TABLE track_features (
-    track_id        INTEGER NOT NULL REFERENCES tracks (id) ON DELETE CASCADE,
-    extractor       TEXT    NOT NULL,
-    model_version   TEXT    NOT NULL,
-    features_json   TEXT    NOT NULL,
+CREATE TABLE IF NOT EXISTS track_features (
+    track_id        BIGINT       NOT NULL,
+    extractor       VARCHAR(64)  NOT NULL,
+    model_version   VARCHAR(64)  NOT NULL,
+    features_json   LONGTEXT     NOT NULL,
     vector_dim      INTEGER,
-    created_at      TEXT    NOT NULL,
-    updated_at      TEXT    NOT NULL,
-    PRIMARY KEY (track_id, extractor)
-);
+    created_at      VARCHAR(32)  NOT NULL,
+    updated_at      VARCHAR(32)  NOT NULL,
+    PRIMARY KEY (track_id, extractor),
+    CONSTRAINT fk_track_features_track FOREIGN KEY (track_id) REFERENCES tracks (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE embed_runs (
-    id              INTEGER PRIMARY KEY,
-    started_at      TEXT    NOT NULL,
-    finished_at     TEXT,
-    trigger         TEXT    NOT NULL,
-    sample_mode     TEXT,
+CREATE TABLE IF NOT EXISTS embed_runs (
+    id              BIGINT       NOT NULL AUTO_INCREMENT,
+    started_at      VARCHAR(32)  NOT NULL,
+    finished_at     VARCHAR(32),
+    `trigger`       VARCHAR(32)  NOT NULL,
+    sample_mode     VARCHAR(32),
     max_tracks      INTEGER,
     tracks_claimed  INTEGER,
     tracks_ok       INTEGER,
     tracks_error    INTEGER,
-    status          TEXT    NOT NULL,
-    error_message   TEXT
-);
+    status          VARCHAR(32)  NOT NULL,
+    error_message   TEXT,
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

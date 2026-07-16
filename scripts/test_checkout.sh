@@ -109,9 +109,10 @@ run_smoke() {
     if [[ -z "${DATA_DIR:-}" ]]; then
       DATA_DIR="$(mktemp -d /tmp/latenttone-checkout-XXXX)"
     fi
+    export MARIADB_DATA="${MARIADB_DATA:-$DATA_DIR/mariadb}"
     chmod 755 "$DATA_DIR" 2>/dev/null || true
     export DATA_DIR
-    echo "DATA_DIR=$DATA_DIR"
+    echo "DATA_DIR=$DATA_DIR MARIADB_DATA=$MARIADB_DATA"
     bash ./scripts/smoke.sh
   )
 }
@@ -124,9 +125,10 @@ run_stream() {
     export COMPOSE_PROJECT_NAME="lt-checkout-stream-$$"
     # Always isolate stream DATA_DIR from browse step (fresh scan inside stream_smoke).
     DATA_DIR="$(mktemp -d /tmp/latenttone-checkout-stream-XXXX)"
+    export MARIADB_DATA="${MARIADB_DATA:-$DATA_DIR/mariadb}"
     chmod 755 "$DATA_DIR" 2>/dev/null || true
     export DATA_DIR
-    echo "DATA_DIR=$DATA_DIR"
+    echo "DATA_DIR=$DATA_DIR MARIADB_DATA=$MARIADB_DATA"
     bash ./scripts/stream_smoke.sh
   )
 }
@@ -142,6 +144,7 @@ run_embed_neighbor() {
     cd "$RUN_ROOT"
     export MUSIC_LIBRARY="${MUSIC_LIBRARY:-/mnt2/media/music}"
     export DATA_DIR="$data_dir"
+    export MARIADB_DATA="${MARIADB_DATA:-$data_dir/mariadb}"
     export BROWSE_PORT="$port"
     export COMPOSE_PROJECT_NAME="$project"
     chmod 755 "$DATA_DIR" 2>/dev/null || true
@@ -165,8 +168,7 @@ run_embed_neighbor() {
       sleep 1
     done
 
-    seed=$(docker run --rm -v "$DATA_DIR:/data" --entrypoint python3 latenttone:dev -c \
-      "import sqlite3; print(sqlite3.connect('/data/latenttone.db').execute('select id from tracks where missing_at is null order by id limit 1').fetchone()[0])")
+    seed=$(bash ./scripts/mariadb_exec.sh "SELECT id FROM tracks WHERE missing_at IS NULL ORDER BY id LIMIT 1")
     if [[ -z "$seed" || "$seed" == "0" ]]; then
       echo "no seed track after embed" >&2
       exit 1

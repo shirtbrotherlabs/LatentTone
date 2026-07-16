@@ -15,7 +15,7 @@ import (
 
 	"github.com/shirtbrotherlabs/LatentTone/internal/auth"
 	"github.com/shirtbrotherlabs/LatentTone/internal/config"
-	"github.com/shirtbrotherlabs/LatentTone/internal/db"
+	"github.com/shirtbrotherlabs/LatentTone/internal/dbtest"
 	"github.com/shirtbrotherlabs/LatentTone/internal/meta"
 	"github.com/shirtbrotherlabs/LatentTone/internal/web"
 )
@@ -37,15 +37,11 @@ func TestArgon2RoundTrip(t *testing.T) {
 
 func TestAuthAPIAndBearer(t *testing.T) {
 	dir := t.TempDir()
-	catalog, err := db.Open(filepath.Join(dir, "t.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer catalog.Close()
+	catalog, dsn := dbtest.Open(t)
 
 	cfg := &config.Config{
 		LibraryRoot: dir,
-		DatabasePath: filepath.Join(dir, "t.db"),
+		DatabaseDSN: dsn,
 		ListenAddr:  ":0",
 		AuthMode:    auth.AuthModeAuth,
 		HLSRoot:     filepath.Join(dir, "hls"),
@@ -53,7 +49,7 @@ func TestAuthAPIAndBearer(t *testing.T) {
 	cfg.AuthMode = "authenticated"
 	_ = cfg
 	// apply defaults via Load-like fields
-	mcfg := &meta.Config{LibraryRoot: dir, DatabasePath: cfg.DatabasePath}
+	mcfg := &meta.Config{LibraryRoot: dir, DatabaseDSN: cfg.DatabaseDSN}
 	srv, err := web.New(cfg, mcfg, catalog, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
