@@ -53,12 +53,23 @@ const STREAM_FORMATS: { value: StreamPrefs["stream_format"]; label: string }[] =
 export function SettingsPage() {
   const { user } = useAuth();
   const { status, stop } = usePlayer();
+  const isAdmin = !!user?.is_admin;
   const [scan, setScan] = useState<ScanStatus | null>(null);
   const [embed, setEmbed] = useState<EmbedStatus | null>(null);
   const [radio, setRadio] = useState<RadioPrefs | null>(null);
   const [stream, setStream] = useState<StreamPrefs | null>(null);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [passwordMsg, setPasswordMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState<
-    "scan" | "embed-start" | "embed-stop" | "radio" | "stream" | "end-station" | null
+    | "scan"
+    | "embed-start"
+    | "embed-stop"
+    | "radio"
+    | "stream"
+    | "end-station"
+    | "password"
+    | null
   >(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -191,6 +202,22 @@ export function SettingsPage() {
     }
   };
 
+  const changePassword = async () => {
+    setBusy("password");
+    setError(null);
+    setPasswordMsg(null);
+    try {
+      await api.changePassword(currentPassword, newPassword);
+      setCurrentPassword("");
+      setNewPassword("");
+      setPasswordMsg("Password updated.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "password change failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const artists = scan?.artists ?? 0;
   const albums = scan?.albums ?? 0;
   const tracks = scan?.tracks ?? embed?.catalog_tracks ?? 0;
@@ -207,6 +234,7 @@ export function SettingsPage() {
           <h3>Signed in</h3>
           <p>Username: {user?.username}</p>
           <p>User id: {user?.id}</p>
+          <p>Role: {isAdmin ? "admin" : "user"}</p>
           <p>
             Listening session:{" "}
             {status && status.status !== "stopped" ? status.status : "none"}
@@ -223,6 +251,45 @@ export function SettingsPage() {
               </button>
             </div>
           ) : null}
+          <form
+            className="settings-stream"
+            style={{ marginTop: "1rem" }}
+            onSubmit={(e) => {
+              e.preventDefault();
+              void changePassword();
+            }}
+          >
+            <h4 style={{ margin: 0 }}>Change password</h4>
+            <label>
+              Current password
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                disabled={busy === "password"}
+              />
+            </label>
+            <label>
+              New password
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                disabled={busy === "password"}
+                minLength={8}
+              />
+            </label>
+            <button
+              type="submit"
+              className="btn"
+              disabled={busy === "password" || !currentPassword || newPassword.length < 8}
+            >
+              {busy === "password" ? "Saving…" : "Update password"}
+            </button>
+            {passwordMsg ? <p className="muted">{passwordMsg}</p> : null}
+          </form>
         </div>
 
         <div className="tile">
@@ -363,16 +430,22 @@ export function SettingsPage() {
             {scan?.running ? " · running" : " · idle"}
           </p>
           {scan?.last ? <p className="muted">Last: {scan.last}</p> : null}
-          <div className="toolbar" style={{ marginTop: "0.75rem" }}>
-            <button
-              type="button"
-              className="btn"
-              disabled={!!busy || !!scan?.running}
-              onClick={() => void startScan()}
-            >
-              {busy === "scan" || scan?.running ? "Scanning…" : "Start scan"}
-            </button>
-          </div>
+          {isAdmin ? (
+            <div className="toolbar" style={{ marginTop: "0.75rem" }}>
+              <button
+                type="button"
+                className="btn"
+                disabled={!!busy || !!scan?.running}
+                onClick={() => void startScan()}
+              >
+                {busy === "scan" || scan?.running ? "Scanning…" : "Start scan"}
+              </button>
+            </div>
+          ) : (
+            <p className="muted" style={{ marginTop: "0.75rem" }}>
+              Status only — an admin must start library scans.
+            </p>
+          )}
         </div>
 
         <div className="tile">
@@ -384,24 +457,30 @@ export function SettingsPage() {
               : " · idle"}
           </p>
           {embed?.last ? <p className="muted">Last: {embed.last}</p> : null}
-          <div className="toolbar" style={{ marginTop: "0.75rem" }}>
-            <button
-              type="button"
-              className="btn"
-              disabled={!!busy || !!embed?.running}
-              onClick={() => void startEmbed()}
-            >
-              {busy === "embed-start" || embed?.running ? "Embedding…" : "Start acoustic scan"}
-            </button>
-            <button
-              type="button"
-              className="btn btn-danger"
-              disabled={!!busy || !embed?.running}
-              onClick={() => void stopEmbed()}
-            >
-              {busy === "embed-stop" ? "Stopping…" : "Stop acoustic scan"}
-            </button>
-          </div>
+          {isAdmin ? (
+            <div className="toolbar" style={{ marginTop: "0.75rem" }}>
+              <button
+                type="button"
+                className="btn"
+                disabled={!!busy || !!embed?.running}
+                onClick={() => void startEmbed()}
+              >
+                {busy === "embed-start" || embed?.running ? "Embedding…" : "Start acoustic scan"}
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                disabled={!!busy || !embed?.running}
+                onClick={() => void stopEmbed()}
+              >
+                {busy === "embed-stop" ? "Stopping…" : "Stop acoustic scan"}
+              </button>
+            </div>
+          ) : (
+            <p className="muted" style={{ marginTop: "0.75rem" }}>
+              Status only — an admin must start or stop acoustic scans.
+            </p>
+          )}
         </div>
       </div>
 

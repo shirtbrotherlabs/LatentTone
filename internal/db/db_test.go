@@ -45,6 +45,53 @@ func TestOpenMigrateUpsert(t *testing.T) {
 		t.Fatal("expected id")
 	}
 
+	batchResults, err := d.UpsertTracks([]TrackInput{
+		{
+			Path:        "AC_DC/Highway to Hell/02 - Girls Got Rhythm.mp3",
+			FileMtime:   1,
+			FileSize:    200,
+			Title:       "Girls Got Rhythm",
+			Album:       "Highway to Hell",
+			AlbumArtist: "AC/DC",
+			Artists:     []string{"AC/DC"},
+			Format:      "mp3",
+			Year:        &year,
+			AlbumYear:   &year,
+		},
+		{
+			Path:        "AC_DC/Highway to Hell/03 - Walk All Over You.mp3",
+			FileMtime:   1,
+			FileSize:    201,
+			Title:       "Walk All Over You",
+			Album:       "Highway to Hell",
+			AlbumArtist: "AC/DC",
+			Artists:     []string{"AC/DC"},
+			Format:      "mp3",
+			Year:        &year,
+			AlbumYear:   &year,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(batchResults) != 2 || batchResults[0].Err != nil || batchResults[1].Err != nil {
+		t.Fatalf("batch upsert: %+v", batchResults)
+	}
+
+	cached := TrackInput{
+		Path:      "AC_DC/Highway to Hell/01 - Highway to Hell.mp3",
+		FileMtime: 1,
+		FileSize:  100,
+	}
+	found, err := d.ReuseScanMetadata(&cached)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || cached.DurationMS == nil || *cached.DurationMS != ms ||
+		cached.Year == nil || *cached.Year != year {
+		t.Fatalf("cached metadata not reused: found=%v duration=%v year=%v", found, cached.DurationMS, cached.Year)
+	}
+
 	// Idempotent second upsert
 	id2, err := d.UpsertTrack(TrackInput{
 		Path:        "AC_DC/Highway to Hell/01 - Highway to Hell.mp3",
@@ -62,12 +109,21 @@ func TestOpenMigrateUpsert(t *testing.T) {
 	if id2 != id {
 		t.Fatalf("id changed %d → %d", id, id2)
 	}
+	track, err := d.GetTrack(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The second upsert intentionally omitted track year; catalog reads should
+	// fall back to the retained album year.
+	if track == nil || !track.Year.Valid || track.Year.Int64 != int64(year) {
+		t.Fatalf("album year fallback missing: track=%+v", track)
+	}
 
 	artists, albums, tracks, err := d.Counts()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if artists < 1 || albums < 1 || tracks != 1 {
+	if artists < 1 || albums < 1 || tracks != 3 {
 		t.Fatalf("counts artists=%d albums=%d tracks=%d", artists, albums, tracks)
 	}
 
@@ -76,7 +132,7 @@ func TestOpenMigrateUpsert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if missing != 1 {
+	if missing != 3 {
 		t.Fatalf("missing=%d", missing)
 	}
 	_, _, tracks, err = d.Counts()

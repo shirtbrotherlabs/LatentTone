@@ -12,14 +12,19 @@ Catalog of third-party dependencies used by LatentTone. Every added or upgraded 
 
 | Name | Purpose | License | GitHub repository | Tagged release | Vendor path |
 |------|---------|---------|-------------------|----------------|-------------|
-| bogem/id3v2 | MP3 ID3 tag reading | MIT | https://github.com/bogem/id3v2 | v2.1.4 | `vendor/github.com/bogem/id3v2/v2` |
+| bogem/id3v2 | MP3 embedded APIC artwork extraction | MIT | https://github.com/bogem/id3v2 | v2.1.4 | `vendor/github.com/bogem/id3v2/v2` |
+| dhowden/tag | MP3/MP4/OGG/FLAC metadata reading | BSD-2-Clause | https://github.com/dhowden/tag | pinned commit `3d75831295e8`¹ | `vendor/github.com/dhowden/tag` |
 | fsnotify/fsnotify | Filesystem watcher for incremental scan | BSD-3-Clause | https://github.com/fsnotify/fsnotify | v1.8.0 | `vendor/github.com/fsnotify/fsnotify` |
 | glebarez/go-sqlite | Pure-Go `database/sql` SQLite driver | MIT | https://github.com/glebarez/go-sqlite | v1.22.0 | `vendor/github.com/glebarez/go-sqlite` |
 | go-flac/go-flac | FLAC container parsing | Apache-2.0 | https://github.com/go-flac/go-flac | v2.0.4 | `vendor/github.com/go-flac/go-flac/v2` |
-| go-flac/flacvorbis | FLAC Vorbis comment tags | Apache-2.0 | https://github.com/go-flac/flacvorbis | v2.0.2 | `vendor/github.com/go-flac/flacvorbis/v2` |
+| tcolgate/mp3 | Accurate MP3 frame-duration calculation without audio decoding | MIT | https://github.com/tcolgate/mp3 | pinned commit `e79c5a46d300`¹ | `vendor/github.com/tcolgate/mp3` |
 | go-yaml/yaml | `scanner.yaml` config parsing (`gopkg.in/yaml.v3`) | MIT / Apache-2.0 | https://github.com/go-yaml/yaml | v3.0.1 | `vendor/gopkg.in/yaml.v3` |
 | golang.org/x/crypto | argon2id password KDF (ADR-005) | BSD-3-Clause | https://github.com/golang/crypto | v0.31.0 | `vendor/golang.org/x/crypto` |
 | swagger-ui | Embedded Swagger UI for `/api/docs` (Phase 3B) | Apache-2.0 | https://github.com/swagger-api/swagger-ui | v5.32.8 | `internal/web/apidocs/static/` (minimal dist subset; see `LICENSE`/`NOTICE`/`VERSION.txt`) |
+
+¹ These upstream repositories publish no GitHub tags. The maintainer approved
+an exception on 2026-07-16: immutable Go pseudo-versions are pinned to the
+listed commits and fully vendored.
 
 ## Frontend dependencies (Phase 4 SPA · `web/`)
 

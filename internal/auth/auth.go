@@ -274,10 +274,80 @@ func RequireUser(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// RequireAdmin returns 401 if unauthenticated and 403 if the user is not an admin.
+func RequireAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return RequireUser(func(w http.ResponseWriter, r *http.Request) {
+		u := UserFrom(r.Context())
+		if u == nil || !u.IsAdmin {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "admin required"})
+			return
+		}
+		next(w, r)
+	})
+}
+
 // UserFrom returns the authenticated user or nil.
 func UserFrom(ctx context.Context) *db.User {
 	u, _ := ctx.Value(ctxUserKey).(*db.User)
 	return u
+}
+
+// BootstrapAdmin creates the admin account when ADMIN_USERNAME / ADMIN_PASSWORD are set
+// and no user with that username exists yet. Existing admins keep their password.
+func BootstrapAdmin(catalog *db.DB, username, password string) error {
+	username = strings.TrimSpace(username)
+	password = strings.TrimSpace(password)
+	if username == "" && password == "" {
+		return nil
+	}
+	if username == "" || password == "" {
+		return fmt.Errorf("ADMIN_USERNAME and ADMIN_PASSWORD must both be set (or both empty)")
+	}
+	if len(username) < 2 || len(username) > 64 {
+		return fmt.Errorf("ADMIN_USERNAME must be 2–64 characters")
+	}
+	if len(password) < 8 {
+		return fmt.Errorf("ADMIN_PASSWORD must be at least 8 characters")
+	}
+	existing, err := catalog.GetUserByUsername(username)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		if !existing.IsAdmin {
+			return fmt.Errorf("user %q exists but is not admin; refuse to bootstrap", username)
+		}
+		return nil
+	}
+	hash, err := HashPassword(password)
+	if err != nil {
+		return err
+	}
+	_, err = catalog.CreateUserRole(username, hash, true)
+	return err
+}
+
+// ChangePassword verifies the current password and stores a new hash.
+func (m *Manager) ChangePassword(userID int64, currentPassword, newPassword string) error {
+	if len(newPassword) < 8 {
+		return fmt.Errorf("password must be at least 8 characters")
+	}
+	u, err := m.DB.GetUserByID(userID)
+	if err != nil {
+		return err
+	}
+	if u == nil {
+		return db.ErrNotFound
+	}
+	ok, err := VerifyPassword(u.PasswordHash, currentPassword)
+	if err != nil || !ok {
+		return fmt.Errorf("current password incorrect")
+	}
+	hash, err := HashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	return m.DB.UpdateUserPasswordHash(userID, hash)
 }
 
 func (m *Manager) allowLogin(key string) bool {

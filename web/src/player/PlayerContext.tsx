@@ -2,7 +2,7 @@
  * Copyright (C) 2026 martinsah
  * SPDX-License-Identifier: GPL-3.0-only
  * Author: martinsah
- * Date: 2026-07-15
+ * Date: 2026-07-16
  */
 
 import {
@@ -376,8 +376,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         resolved.push({
           ...track,
           source: q.source,
-          feedback: q.feedback,
-          play_count: q.play_count,
+          feedback: q.feedback ?? track.feedback,
+          play_count: q.play_count ?? track.play_count,
         });
       }
       return resolved;
@@ -545,8 +545,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       const id = sessionIdRef.current || status?.id;
       if (!id) throw new Error("no active session");
       const isSkip = signal === "skip";
-      const isAdvance = isSkip || signal === "complete";
-      if (isSkip) setSkipping(true);
+      const isAdvance = isSkip || signal === "complete" || signal === "dislike";
+      if (isSkip || signal === "dislike") setSkipping(true);
       if (signal === "like" || signal === "dislike") {
         setTrackFeedback(signal);
       }
@@ -596,13 +596,21 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         }
         const s = await api.feedback(id, signal);
         setStatus(s);
-        if (signal === "like" || signal === "dislike") {
+        if (signal === "like") {
           const fb = s.now_playing?.feedback;
           if (fb === "like" || fb === "dislike") setTrackFeedback(fb);
-          else setTrackFeedback(signal);
+          else setTrackFeedback("like");
+        } else if (signal === "dislike") {
+          // Dislike advances off the current track — thumbs reflect the new now-playing.
+          const fb = s.now_playing?.feedback;
+          setTrackFeedback(fb === "like" || fb === "dislike" ? fb : null);
         }
         // Server advanced when client had no queue head yet — attach now.
-        if (signal === "complete" && !didOptimisticAttach && s.now_playing?.track_id) {
+        if (
+          (signal === "complete" || signal === "dislike") &&
+          !didOptimisticAttach &&
+          s.now_playing?.track_id
+        ) {
           const tid = s.now_playing.track_id;
           const progressiveUrl = s.progressive_url || `/api/v1/tracks/${tid}/stream`;
           setError(null);
@@ -634,7 +642,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         }
         throw e;
       } finally {
-        if (isSkip) setSkipping(false);
+        if (isSkip || signal === "dislike") setSkipping(false);
       }
     },
     [status, reportEngineError],

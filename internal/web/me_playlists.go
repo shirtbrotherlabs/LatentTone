@@ -124,7 +124,7 @@ func (s *Server) meCreatePlaylist(w http.ResponseWriter, r *http.Request, userID
 		writeJSONError(w, http.StatusInternalServerError, "created but not found")
 		return
 	}
-	writeJSON(w, http.StatusCreated, playlistJSON(pl, nil))
+	s.writePlaylistJSON(w, r, http.StatusCreated, pl, nil)
 }
 
 func (s *Server) meGetPlaylist(w http.ResponseWriter, r *http.Request, userID, id int64) {
@@ -142,7 +142,7 @@ func (s *Server) meGetPlaylist(w http.ResponseWriter, r *http.Request, userID, i
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, playlistJSON(pl, entries))
+	s.writePlaylistJSON(w, r, http.StatusOK, pl, entries)
 }
 
 type patchPlaylistBody struct {
@@ -174,7 +174,7 @@ func (s *Server) meRenamePlaylist(w http.ResponseWriter, r *http.Request, userID
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, playlistJSON(pl, entries))
+	s.writePlaylistJSON(w, r, http.StatusOK, pl, entries)
 }
 
 func (s *Server) meDeletePlaylist(w http.ResponseWriter, r *http.Request, userID, id int64) {
@@ -264,7 +264,7 @@ func (s *Server) meAddTracks(w http.ResponseWriter, r *http.Request, userID, pla
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, playlistJSON(pl, entries))
+	s.writePlaylistJSON(w, r, http.StatusOK, pl, entries)
 }
 
 func (s *Server) meRemoveTrack(w http.ResponseWriter, r *http.Request, userID, playlistID, trackID int64) {
@@ -286,7 +286,7 @@ func (s *Server) meRemoveTrack(w http.ResponseWriter, r *http.Request, userID, p
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, playlistJSON(pl, entries))
+	s.writePlaylistJSON(w, r, http.StatusOK, pl, entries)
 }
 
 func (s *Server) meReorderTracks(w http.ResponseWriter, r *http.Request, userID, playlistID int64) {
@@ -313,7 +313,7 @@ func (s *Server) meReorderTracks(w http.ResponseWriter, r *http.Request, userID,
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, playlistJSON(pl, entries))
+	s.writePlaylistJSON(w, r, http.StatusOK, pl, entries)
 }
 
 func (s *Server) meFromNeighbor(w http.ResponseWriter, r *http.Request, userID int64) {
@@ -345,5 +345,5 @@ func (s *Server) meFromNeighbor(w http.ResponseWriter, r *http.Request, userID i
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusCreated, playlistJSON(pl, entries))
+	s.writePlaylistJSON(w, r, http.StatusCreated, pl, entries)
 }

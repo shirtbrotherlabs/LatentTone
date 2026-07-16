@@ -51,14 +51,55 @@ func (s *Scanner) Full(trigger string) (*Result, error) {
 	type job struct {
 		abs, rel string
 	}
+	const writeBatchSize = 64
 	jobs := make(chan job, 256)
+	writes := make(chan db.TrackInput, writeBatchSize*4)
 	var (
 		seenMu   sync.Mutex
 		seen     = map[string]struct{}{}
 		upserted atomic.Int64
 		errCount atomic.Int64
 		wg       sync.WaitGroup
+		writerWG sync.WaitGroup
 	)
+
+	// Single writer: drain metadata results into SQLite batches.
+	writerWG.Add(1)
+	go func() {
+		defer writerWG.Done()
+		batch := make([]db.TrackInput, 0, writeBatchSize)
+		flush := func() {
+			if len(batch) == 0 {
+				return
+			}
+			results, err := s.DB.UpsertTracks(batch)
+			if err != nil {
+				s.Log.Printf("upsert batch (%d): %v", len(batch), err)
+				errCount.Add(int64(len(batch)))
+				batch = batch[:0]
+				return
+			}
+			for _, r := range results {
+				if r.Err != nil {
+					s.Log.Printf("upsert %s: %v", r.Path, r.Err)
+					errCount.Add(1)
+					continue
+				}
+				upserted.Add(1)
+				seenMu.Lock()
+				seen[r.Path] = struct{}{}
+				seenMu.Unlock()
+			}
+			batch = batch[:0]
+		}
+		for in := range writes {
+			batch = append(batch, in)
+			if len(batch) >= writeBatchSize {
+				flush()
+			}
+		}
+		flush()
+	}()
 
 	workers := s.Cfg.Concurrency
 	if workers < 1 {
@@ -78,20 +119,24 @@ func (s *Scanner) Full(trigger string) (*Result, error) {
 						continue
 					}
 				}
-				cover, err := FindCover(filepath.Dir(j.abs), root, s.Cfg.CoverNames)
+				if _, cacheErr := s.DB.ReuseScanMetadata(&in); cacheErr != nil {
+					s.Log.Printf("scan metadata cache %s: %v", j.rel, cacheErr)
+				}
+				if in.DurationMS == nil || in.Year == nil {
+					if probeErr := tags.EnrichMediaInfo(j.abs, s.Cfg.FFmpegPath, &in); probeErr != nil {
+						s.Log.Printf("media info %s: %v", j.rel, probeErr)
+					}
+				}
+				albumDir := filepath.Dir(j.abs)
+				cover, err := FindCover(albumDir, root, s.Cfg.CoverNames)
 				if err != nil {
 					s.Log.Printf("cover %s: %v", j.rel, err)
 				}
-				in.CoverPath = cover
-				if _, err := s.DB.UpsertTrack(in); err != nil {
-					s.Log.Printf("upsert %s: %v", j.rel, err)
-					errCount.Add(1)
-					continue
+				if cover == "" {
+					cover = EnsureEmbeddedCover(j.abs, albumDir, root, s.Cfg.CoverCacheDir)
 				}
-				upserted.Add(1)
-				seenMu.Lock()
-				seen[in.Path] = struct{}{}
-				seenMu.Unlock()
+				in.CoverPath = cover
+				writes <- in
 			}
 		}()
 	}
@@ -125,6 +170,8 @@ func (s *Scanner) Full(trigger string) (*Result, error) {
 	})
 	close(jobs)
 	wg.Wait()
+	close(writes)
+	writerWG.Wait()
 
 	if walkErr != nil {
 		_ = s.DB.FinishScanRun(runID, len(seen), int(upserted.Load()), 0, "error", walkErr.Error())
@@ -171,7 +218,19 @@ func (s *Scanner) ScanPath(absPath string) error {
 	if err != nil && in.Title == "" {
 		return err
 	}
-	cover, _ := FindCover(filepath.Dir(absPath), root, s.Cfg.CoverNames)
+	if _, cacheErr := s.DB.ReuseScanMetadata(&in); cacheErr != nil {
+		return cacheErr
+	}
+	if in.DurationMS == nil || in.Year == nil {
+		// Keep watcher scans resilient: path/tag metadata is still useful if
+		// ffprobe cannot decode a damaged or unsupported file.
+		_ = tags.EnrichMediaInfo(absPath, s.Cfg.FFmpegPath, &in)
+	}
+	albumDir := filepath.Dir(absPath)
+	cover, _ := FindCover(albumDir, root, s.Cfg.CoverNames)
+	if cover == "" {
+		cover = EnsureEmbeddedCover(absPath, albumDir, root, s.Cfg.CoverCacheDir)
+	}
 	in.CoverPath = cover
 	_, err = s.DB.UpsertTrack(in)
 	return err
@@ -195,7 +254,7 @@ func excluded(rel string, patterns []string) bool {
 			continue
 		}
 		// Simple substring / suffix heuristics for common exclude globs.
-		p = strings.ReplaceAll(p, "**/" , "")
+		p = strings.ReplaceAll(p, "**/", "")
 		p = strings.Trim(p, "*")
 		if p != "" && strings.Contains(rel, strings.Trim(p, "/")) {
 			return true

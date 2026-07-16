@@ -2,7 +2,7 @@
  * Copyright (C) 2026 martinsah
  * SPDX-License-Identifier: GPL-3.0-only
  * Author: martinsah
- * Date: 2026-07-15
+ * Date: 2026-07-16
  *
  * Progressive <audio> first for near-instant track switches; HLS optional warm path.
  * Web Audio gain + analyser for volume, mute, and spectrum.
@@ -136,12 +136,15 @@ export class AudioEngine {
     return this.muted;
   }
 
+  /** Snap GainNode (or element.volume) to the current mute/volume level. Never leave the fade floor. */
   private applyGain() {
     const level = this.muted ? 0 : this.volume;
     if (this.gain && this.ctx) {
       const now = this.ctx.currentTime;
-      this.gain.gain.cancelScheduledValues(now);
-      this.gain.gain.setValueAtTime(Math.max(level, 0.0001), now);
+      const g = this.gain.gain;
+      g.cancelScheduledValues(now);
+      // Mute uses a true zero; audible levels stay above the exponential-ramp floor.
+      g.setValueAtTime(this.muted ? 0 : Math.max(level, 0.0001), now);
       this.audio.volume = 1;
     } else {
       this.audio.volume = level;
@@ -150,13 +153,23 @@ export class AudioEngine {
 
   async softFadeIn(ms = 180) {
     this.ensureGraph();
-    if (!this.ctx || !this.gain || this.muted) return;
+    if (!this.ctx || !this.gain || this.muted) {
+      this.applyGain();
+      return;
+    }
     const target = Math.max(this.volume, 0.0001);
     const g = this.gain.gain;
     const now = this.ctx.currentTime;
     g.cancelScheduledValues(now);
     g.setValueAtTime(0.001, now);
-    g.exponentialRampToValueAtTime(target, now + ms / 1000);
+    try {
+      g.exponentialRampToValueAtTime(target, now + ms / 1000);
+      await new Promise((r) => setTimeout(r, ms));
+    } catch {
+      /* ramp unsupported — fall through to snap */
+    }
+    // Lock final level: ramps can be cancelled by a later attach/pause.
+    this.applyGain();
   }
 
   async softFadeOut(ms = 120) {
@@ -165,8 +178,22 @@ export class AudioEngine {
     const now = this.ctx.currentTime;
     g.cancelScheduledValues(now);
     g.setValueAtTime(Math.max(g.value, 0.001), now);
-    g.exponentialRampToValueAtTime(0.001, now + ms / 1000);
+    try {
+      g.exponentialRampToValueAtTime(0.001, now + ms / 1000);
+    } catch {
+      g.setValueAtTime(0.001, now);
+    }
     await new Promise((r) => setTimeout(r, ms));
+    // Leave at fade floor only until the caller loads the next src and applyGain/softFadeIn.
+  }
+
+  /** Abort any in-flight Range prefetch so it cannot race the real attach GET. */
+  private cancelPrefetch() {
+    if (this.prefetchAbort) {
+      this.prefetchAbort.abort();
+      this.prefetchAbort = null;
+    }
+    this.prefetchUrl = "";
   }
 
   /**
@@ -176,11 +203,8 @@ export class AudioEngine {
    */
   prefetchProgressive(url?: string) {
     if (!url || url === this.prefetchUrl) return;
+    this.cancelPrefetch();
     this.prefetchUrl = url;
-    if (this.prefetchAbort) {
-      this.prefetchAbort.abort();
-      this.prefetchAbort = null;
-    }
     const ac = new AbortController();
     this.prefetchAbort = ac;
     const timer = window.setTimeout(() => ac.abort(), 4000);
@@ -229,18 +253,42 @@ export class AudioEngine {
   private async safePlay(onError?: (msg: string) => void, fadeIn = true): Promise<void> {
     const epoch = this.playEpoch;
     try {
+      this.ensureGraph();
       await this.ctx?.resume();
-      if (epoch !== this.playEpoch) return;
+      if (epoch !== this.playEpoch) {
+        this.applyGain();
+        return;
+      }
+      // softFadeOut leaves GainNode ≈0.001. Always restore unless we intentionally fade in.
+      if (fadeIn && this.gain && this.ctx && !this.muted) {
+        const now = this.ctx.currentTime;
+        this.gain.gain.cancelScheduledValues(now);
+        this.gain.gain.setValueAtTime(0.001, now);
+        this.audio.volume = 1;
+      } else {
+        this.applyGain();
+      }
       await this.audio.play();
-      if (epoch !== this.playEpoch) return;
+      if (epoch !== this.playEpoch) {
+        this.applyGain();
+        return;
+      }
       if (fadeIn) await this.softFadeIn(120);
-      if (epoch !== this.playEpoch) return;
+      else this.applyGain();
+      if (epoch !== this.playEpoch) {
+        this.applyGain();
+        return;
+      }
       this.playStateHandler?.(true);
     } catch (e) {
+      // Never leave the graph at the fade floor after a failed/interrupted play.
+      this.applyGain();
       if (epoch !== this.playEpoch || isAbortLike(e)) {
         return;
       }
-      onError?.(e instanceof Error ? e.message : "playback blocked");
+      const msg = e instanceof Error ? e.message : "playback blocked";
+      if (isDev) console.warn("[lt-player] play failed", msg);
+      onError?.(msg);
     }
   }
 
@@ -343,6 +391,8 @@ export class AudioEngine {
     }
     if (key === this.lastKey) {
       if (this.audio.paused) {
+        // Same src re-play (e.g. status poll); restore gain in case a prior fade left it down.
+        this.applyGain();
         await this.safePlay(opts.onError, false);
       }
       return;
@@ -350,7 +400,14 @@ export class AudioEngine {
     if (isDev) {
       console.debug("[lt-player] attach", { trackId: opts.trackId, primary });
     }
-    await this.softFadeOut(60);
+    // Crossfade-out only while still playing; natural `ended` is already silent.
+    // Spectrum/getAnalyser may have connected the graph already — never softFadeOut
+    // unless media is actually audible, or we silence track 1 before play.
+    const wasPlaying = !this.audio.paused && this.audio.readyState > 0;
+    if (wasPlaying) {
+      await this.softFadeOut(60);
+    }
+    this.cancelPrefetch();
     this.destroyHls();
     this.lastKey = key;
     this.ensureGraph();
@@ -365,30 +422,38 @@ export class AudioEngine {
       } catch {
         /* ignore */
       }
+      // New media: always snap gain before play (safePlay also restores / fades).
+      this.applyGain();
       const epoch = this.playEpoch;
+      const reportAttachFail = (detail: string) => {
+        if (isDev) console.warn("[lt-player] attach failed", detail);
+        opts.onError?.(detail);
+      };
       const onProgError = () => {
         if (epoch !== this.playEpoch) return;
+        this.applyGain();
         const detail = this.mediaErrorMessage();
         if (isDev) console.warn("[lt-player] progressive error", detail);
         if (hlsUrl) {
           this.lastKey = `${opts.trackId ?? 0}|hls`;
           void this.attachHls({ ...opts, hlsUrl, progressiveUrl }, (msg) => {
-            opts.onError?.(`${detail}; HLS fallback failed: ${msg}`);
+            reportAttachFail(`${detail}; HLS fallback failed: ${msg}`);
           });
           return;
         }
-        opts.onError?.(detail);
+        reportAttachFail(detail);
       };
       this.audio.addEventListener("error", onProgError, { once: true });
-      // Play immediately for fast skip / natural advance; keeps MediaSession continuity
-      // on Android when called from the ended handler.
+      // Play immediately for skip / natural advance; keeps MediaSession continuity
+      // on Android when called from the ended handler (do not await canplay first).
+      // Short fade-in only when replacing an already-playing track.
       void this.safePlay((msg) => {
         if (/decode|not supported|format|couldn't fetch/i.test(msg) && hlsUrl) {
           onProgError();
           return;
         }
-        opts.onError?.(msg);
-      }, false);
+        reportAttachFail(msg);
+      }, wasPlaying);
       // Warm HLS in the background for clients that later prefer it; failures are ignored.
       if (hlsUrl) {
         void fetch(hlsUrl, { credentials: "include", cache: "no-store" }).catch(() => undefined);
@@ -397,12 +462,14 @@ export class AudioEngine {
     }
 
     if (hlsUrl) {
+      this.applyGain();
       await this.attachHls({ ...opts, hlsUrl, progressiveUrl }, opts.onError);
       return;
     }
 
     if (progressiveUrl) {
       await this.loadProgressive(progressiveUrl);
+      this.applyGain();
       await this.safePlay(opts.onError, false);
       return;
     }
@@ -476,11 +543,7 @@ export class AudioEngine {
     this.audio.pause();
     this.audio.removeAttribute("src");
     this.lastKey = "";
-    if (this.prefetchAbort) {
-      this.prefetchAbort.abort();
-      this.prefetchAbort = null;
-    }
-    this.prefetchUrl = "";
+    this.cancelPrefetch();
   }
 }
 

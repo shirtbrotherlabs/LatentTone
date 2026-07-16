@@ -378,7 +378,7 @@ type TrackEmbedBrief struct {
 func (d *DB) GetTrackEmbedBrief(trackID int64) (*TrackEmbedBrief, error) {
 	row := d.SQL.QueryRow(`
 SELECT t.id, t.path, COALESCE(t.file_mtime,0), COALESCE(t.file_size,0), t.title, COALESCE(t.format,''),
-       t.duration_ms, t.bitrate_kbps, t.sample_rate_hz, t.channels, t.year,
+       t.duration_ms, t.bitrate_kbps, t.sample_rate_hz, t.channels, COALESCE(t.year, al.year),
        COALESCE((SELECT GROUP_CONCAT(g.name, '|') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id), ''),
        COALESCE(al.title, ''), COALESCE(a.name, '')
 FROM tracks t

@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // TrackInput is catalog upsert payload from the scanner.
@@ -37,12 +38,90 @@ type TrackInput struct {
 	AlbumYear    *int
 }
 
+// ReuseScanMetadata copies previously probed technical fields when the source
+// file signature is unchanged. It returns true when a matching catalog row
+// exists. This avoids launching ffprobe for every MP3 on every full scan.
+func (d *DB) ReuseScanMetadata(in *TrackInput) (bool, error) {
+	if d == nil || d.SQL == nil || in == nil || in.Path == "" {
+		return false, nil
+	}
+	var duration, year sql.NullInt64
+	err := d.SQL.QueryRow(`
+SELECT duration_ms, year
+FROM tracks
+WHERE path = ? AND file_mtime = ? AND file_size = ? AND missing_at IS NULL`,
+		in.Path, in.FileMtime, in.FileSize,
+	).Scan(&duration, &year)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if in.DurationMS == nil && duration.Valid && duration.Int64 > 0 {
+		value := duration.Int64
+		in.DurationMS = &value
+	}
+	if in.Year == nil && year.Valid && year.Int64 > 0 {
+		value := int(year.Int64)
+		in.Year = &value
+		in.AlbumYear = &value
+	}
+	return true, nil
+}
+
+// UpsertTrackResult is one row outcome from a batched catalog write.
+type UpsertTrackResult struct {
+	Path    string
+	TrackID int64
+	Err     error
+}
+
 // UpsertTrack inserts or updates a track and related artist/album/genre rows.
 func (d *DB) UpsertTrack(in TrackInput) (trackID int64, err error) {
+	results, err := d.UpsertTracks([]TrackInput{in})
+	if err != nil {
+		return 0, err
+	}
+	if len(results) == 0 {
+		return 0, fmt.Errorf("upsert produced no result")
+	}
+	return results[0].TrackID, results[0].Err
+}
+
+// UpsertTracks writes many tracks in a single SQLite transaction.
+// Concurrent metadata readers feed this; SQLite still has one writer, so the
+// batch is serialized under writeMu. Per-track SAVEPOINTs keep one bad file
+// from rolling back the whole batch.
+func (d *DB) UpsertTracks(batch []TrackInput) ([]UpsertTrackResult, error) {
+	out := make([]UpsertTrackResult, 0, len(batch))
+	if len(batch) == 0 {
+		return out, nil
+	}
+
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+
+	var lastErr error
+	for attempt := 0; attempt < 8; attempt++ {
+		out, lastErr = d.upsertTracksLocked(batch)
+		if lastErr == nil {
+			return out, nil
+		}
+		if !isSQLiteBusy(lastErr) {
+			return nil, lastErr
+		}
+		time.Sleep(time.Duration(50*(attempt+1)) * time.Millisecond)
+	}
+	return nil, lastErr
+}
+
+func (d *DB) upsertTracksLocked(batch []TrackInput) ([]UpsertTrackResult, error) {
+	out := make([]UpsertTrackResult, 0, len(batch))
 	now := Now()
 	tx, err := d.SQL.Begin()
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	defer func() {
 		if err != nil {
@@ -50,6 +129,58 @@ func (d *DB) UpsertTrack(in TrackInput) (trackID int64, err error) {
 		}
 	}()
 
+	for i, in := range batch {
+		res := UpsertTrackResult{Path: in.Path}
+		sp := fmt.Sprintf("sp_%d", i)
+		if _, e := tx.Exec("SAVEPOINT " + sp); e != nil {
+			if isSQLiteBusy(e) {
+				err = e
+				return nil, err
+			}
+			res.Err = e
+			out = append(out, res)
+			continue
+		}
+		id, e := upsertTrackTx(tx, in, now)
+		if e != nil {
+			_, _ = tx.Exec("ROLLBACK TO " + sp)
+			_, _ = tx.Exec("RELEASE " + sp)
+			if isSQLiteBusy(e) {
+				err = e
+				return nil, err
+			}
+			res.Err = e
+			out = append(out, res)
+			continue
+		}
+		if _, e := tx.Exec("RELEASE " + sp); e != nil {
+			if isSQLiteBusy(e) {
+				err = e
+				return nil, err
+			}
+			res.Err = e
+			out = append(out, res)
+			continue
+		}
+		res.TrackID = id
+		out = append(out, res)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func isSQLiteBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "database is locked") || strings.Contains(msg, "sqlite_busy")
+}
+
+func upsertTrackTx(tx *sql.Tx, in TrackInput, now string) (trackID int64, err error) {
 	albumArtist := strings.TrimSpace(in.AlbumArtist)
 	if albumArtist == "" && len(in.Artists) > 0 {
 		albumArtist = strings.TrimSpace(in.Artists[0])
@@ -99,13 +230,9 @@ INSERT INTO tracks (
 			now, now,
 		)
 		if e != nil {
-			err = e
-			return 0, err
+			return 0, e
 		}
-		trackID, err = res.LastInsertId()
-		if err != nil {
-			return 0, err
-		}
+		return res.LastInsertId()
 	case err != nil:
 		return 0, err
 	default:
@@ -147,8 +274,7 @@ WHERE id = ?`,
 		}
 		aid, e := upsertArtistTx(tx, name, now)
 		if e != nil {
-			err = e
-			return 0, err
+			return 0, e
 		}
 		role := "primary"
 		if i > 0 {
@@ -170,8 +296,7 @@ WHERE id = ?`,
 		}
 		gid, e := upsertGenreTx(tx, g)
 		if e != nil {
-			err = e
-			return 0, err
+			return 0, e
 		}
 		_, err = tx.Exec(
 			`INSERT OR IGNORE INTO track_genres (track_id, genre_id, source) VALUES (?, ?, 'tag')`,
@@ -180,10 +305,6 @@ WHERE id = ?`,
 		if err != nil {
 			return 0, err
 		}
-	}
-
-	if err = tx.Commit(); err != nil {
-		return 0, err
 	}
 	return trackID, nil
 }
@@ -406,21 +527,28 @@ type Track struct {
 
 // ListArtists returns artists with at least one non-missing track, sorted.
 // CoverPath is a representative album cover (first album with a cover, by year/title).
+// Uses EXISTS (not JOIN) so the planner can use idx_tracks_album_missing per album.
 func (d *DB) ListArtists() ([]Artist, error) {
 	rows, err := d.SQL.Query(`
 SELECT a.id, a.name,
   (SELECT al.cover_path
    FROM albums al
-   JOIN tracks t ON t.album_id = al.id AND t.missing_at IS NULL
    WHERE al.artist_id = a.id
      AND al.cover_path IS NOT NULL AND TRIM(al.cover_path) != ''
+     AND EXISTS (
+       SELECT 1 FROM tracks t
+       WHERE t.album_id = al.id AND t.missing_at IS NULL
+     )
    ORDER BY al.year, al.title COLLATE NOCASE
    LIMIT 1) AS cover_path
 FROM artists a
 WHERE EXISTS (
   SELECT 1 FROM albums al
-  JOIN tracks t ON t.album_id = al.id AND t.missing_at IS NULL
   WHERE al.artist_id = a.id
+    AND EXISTS (
+      SELECT 1 FROM tracks t
+      WHERE t.album_id = al.id AND t.missing_at IS NULL
+    )
 )
 ORDER BY COALESCE(a.name_sort, a.name) COLLATE NOCASE`)
 	if err != nil {
@@ -488,7 +616,7 @@ WHERE al.id = ?`, id)
 func (d *DB) ListTracksByAlbum(albumID int64) ([]Track, error) {
 	rows, err := d.SQL.Query(`
 SELECT t.id, t.album_id, t.path, t.title, t.track_number, t.disc_number, t.duration_ms,
-       t.bitrate_kbps, t.sample_rate_hz, t.channels, t.format, t.year, t.comment, t.missing_at,
+       t.bitrate_kbps, t.sample_rate_hz, t.channels, t.format, COALESCE(t.year, al.year), t.comment, t.missing_at,
        COALESCE(al.title, ''), COALESCE(a.name, ''), al.cover_path,
        COALESCE((SELECT GROUP_CONCAT(g.name, ', ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id), ''),
        al.artist_id
@@ -508,7 +636,7 @@ ORDER BY COALESCE(t.disc_number,1), COALESCE(t.track_number, 9999), t.title COLL
 func (d *DB) GetTrack(id int64) (*Track, error) {
 	row := d.SQL.QueryRow(`
 SELECT t.id, t.album_id, t.path, t.title, t.track_number, t.disc_number, t.duration_ms,
-       t.bitrate_kbps, t.sample_rate_hz, t.channels, t.format, t.year, t.comment, t.missing_at,
+       t.bitrate_kbps, t.sample_rate_hz, t.channels, t.format, COALESCE(t.year, al.year), t.comment, t.missing_at,
        COALESCE(al.title, ''), COALESCE(a.name, ''), al.cover_path,
        COALESCE((SELECT GROUP_CONCAT(g.name, ', ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id), ''),
        al.artist_id
@@ -543,7 +671,7 @@ func (d *DB) ListSeedSuggestions(limit int) ([]Track, error) {
 	}
 	const trackCols = `
 SELECT t.id, t.album_id, t.path, t.title, t.track_number, t.disc_number, t.duration_ms,
-       t.bitrate_kbps, t.sample_rate_hz, t.channels, t.format, t.year, t.comment, t.missing_at,
+       t.bitrate_kbps, t.sample_rate_hz, t.channels, t.format, COALESCE(t.year, al.year), t.comment, t.missing_at,
        COALESCE(al.title, ''), COALESCE(a.name, ''), al.cover_path,
        COALESCE((SELECT GROUP_CONCAT(g.name, ', ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id), ''),
        al.artist_id
@@ -623,7 +751,7 @@ func (d *DB) ListTracksFiltered(limit int, q string, year int) ([]Track, error) 
 	args = append(args, limit)
 	sqlStr := `
 SELECT t.id, t.album_id, t.path, t.title, t.track_number, t.disc_number, t.duration_ms,
-       t.bitrate_kbps, t.sample_rate_hz, t.channels, t.format, t.year, t.comment, t.missing_at,
+       t.bitrate_kbps, t.sample_rate_hz, t.channels, t.format, COALESCE(t.year, al.year), t.comment, t.missing_at,
        COALESCE(al.title, ''), COALESCE(a.name, ''), al.cover_path,
        COALESCE((SELECT GROUP_CONCAT(g.name, ', ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id), ''),
        al.artist_id

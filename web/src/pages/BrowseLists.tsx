@@ -2,7 +2,7 @@
  * Copyright (C) 2026 martinsah
  * SPDX-License-Identifier: GPL-3.0-only
  * Author: martinsah
- * Date: 2026-07-15
+ * Date: 2026-07-16
  */
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
@@ -11,7 +11,6 @@ import { api } from "../api/client";
 import type { CatalogAlbum, CatalogArtist, CatalogTrack } from "../api/types";
 import { TrackTable } from "../components/TrackTable";
 import { usePlayer } from "../player/PlayerContext";
-import { TrackActions, formatDuration } from "../components/TrackActions";
 
 function artistLetter(name: string): string {
   const ch = (name.trim()[0] || "#").toUpperCase();
@@ -205,7 +204,7 @@ export function AlbumDetail() {
           ) : null}
         </div>
       </div>
-      <TrackTable tracks={tracks} showAlbum={false} />
+      <TrackTable tracks={tracks} showAlbum={false} showYear={false} />
     </div>
   );
 }
@@ -324,17 +323,22 @@ export function TrackDetailPage() {
           </h2>
           <p className="muted">
             {track.artist} · {track.album}
-            {track.year ? ` · ${track.year}` : ""} · {formatDuration(track.duration_ms)}
+            {track.year ? ` · ${track.year}` : ""}
           </p>
           {track.genres ? <p className="muted">{track.genres}</p> : null}
           <div className="toolbar" style={{ marginTop: "0.75rem" }}>
             <button type="button" className="btn" onClick={() => void startRadio(track.id)}>
               Create radio station
             </button>
-            <TrackActions track={track} />
           </div>
         </div>
       </div>
+      <TrackTable
+        tracks={[track]}
+        showArtist={false}
+        showAlbum={false}
+        showYear={false}
+      />
     </div>
   );
 }

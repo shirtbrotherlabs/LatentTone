@@ -7,15 +7,16 @@ package tags
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
-	"github.com/bogem/id3v2/v2"
-	"github.com/go-flac/flacvorbis/v2"
+	mediatag "github.com/dhowden/tag"
 	"github.com/go-flac/go-flac/v2"
 	"github.com/shirtbrotherlabs/LatentTone/internal/db"
+	"github.com/tcolgate/mp3"
 )
 
 // Extract reads structural metadata from an audio file and applies path fallbacks.
@@ -38,6 +39,8 @@ func Extract(absPath, relPath string) (db.TrackInput, error) {
 		tagErr = readMP3(absPath, &in)
 	case "flac":
 		tagErr = readFLAC(absPath, &in)
+	case "m4a", "aac", "ogg", "opus":
+		tagErr = readCommonTags(absPath, &in)
 	default:
 		// Other formats: path fallbacks only in Phase 1 (tagged OSS readers TBD).
 		tagErr = nil
@@ -55,93 +58,18 @@ func Extract(absPath, relPath string) (db.TrackInput, error) {
 }
 
 func readMP3(path string, in *db.TrackInput) error {
-	tag, err := id3v2.Open(path, id3v2.Options{Parse: true})
-	if err != nil {
-		return err
+	tagErr := readCommonTags(path, in)
+	if ms, ok := readMP3Duration(path); ok {
+		in.DurationMS = &ms
 	}
-	defer tag.Close()
-
-	in.Title = strings.TrimSpace(tag.Title())
-	in.Album = strings.TrimSpace(tag.Album())
-	artist := strings.TrimSpace(tag.Artist())
-	if artist != "" {
-		in.Artists = splitArtists(artist)
-	}
-	// AlbumArtist via TPE2
-	if t := tag.GetTextFrame(tag.CommonID("Band/Orchestra/Accompaniment")); t.Text != "" {
-		in.AlbumArtist = strings.TrimSpace(t.Text)
-	}
-	if g := strings.TrimSpace(tag.Genre()); g != "" {
-		in.Genres = splitGenres(g)
-	}
-	if y := strings.TrimSpace(tag.Year()); y != "" {
-		if n, err := strconv.Atoi(y); err == nil && n > 0 {
-			in.Year = intPtr(n)
-			in.AlbumYear = intPtr(n)
-		}
-	}
-	if tn := strings.TrimSpace(tag.GetTextFrame(tag.CommonID("Track number/Position in set")).Text); tn != "" {
-		if n, ok := parseNumBeforeSlash(tn); ok {
-			in.TrackNumber = intPtr(n)
-		}
-	}
-	if dn := strings.TrimSpace(tag.GetTextFrame(tag.CommonID("Part of a set")).Text); dn != "" {
-		if n, ok := parseNumBeforeSlash(dn); ok {
-			in.DiscNumber = intPtr(n)
-		}
-	}
-	in.Comment = firstComment(tag)
-	return nil
+	return tagErr
 }
 
 func readFLAC(path string, in *db.TrackInput) error {
+	tagErr := readCommonTags(path, in)
 	f, err := flac.ParseFile(path)
 	if err != nil {
 		return err
-	}
-	for _, b := range f.Meta {
-		if b.Type != flac.VorbisComment {
-			continue
-		}
-		c, err := flacvorbis.ParseFromMetaDataBlock(*b)
-		if err != nil {
-			return err
-		}
-		if v, _ := c.Get(flacvorbis.FIELD_TITLE); len(v) > 0 {
-			in.Title = strings.TrimSpace(v[0])
-		}
-		if v, _ := c.Get(flacvorbis.FIELD_ALBUM); len(v) > 0 {
-			in.Album = strings.TrimSpace(v[0])
-		}
-		if v, _ := c.Get(flacvorbis.FIELD_ARTIST); len(v) > 0 {
-			in.Artists = splitArtists(strings.TrimSpace(v[0]))
-		}
-		if v, _ := c.Get("ALBUMARTIST"); len(v) > 0 {
-			in.AlbumArtist = strings.TrimSpace(v[0])
-		}
-		if v, _ := c.Get(flacvorbis.FIELD_GENRE); len(v) > 0 {
-			in.Genres = splitGenres(strings.TrimSpace(v[0]))
-		}
-		if v, _ := c.Get(flacvorbis.FIELD_TRACKNUMBER); len(v) > 0 {
-			if n, ok := parseNumBeforeSlash(v[0]); ok {
-				in.TrackNumber = intPtr(n)
-			}
-		}
-		if v, _ := c.Get("DISCNUMBER"); len(v) > 0 {
-			if n, ok := parseNumBeforeSlash(v[0]); ok {
-				in.DiscNumber = intPtr(n)
-			}
-		}
-		if v, _ := c.Get(flacvorbis.FIELD_DATE); len(v) > 0 {
-			y := strings.TrimSpace(v[0])
-			if len(y) >= 4 {
-				if n, err := strconv.Atoi(y[:4]); err == nil && n > 0 {
-					in.Year = intPtr(n)
-					in.AlbumYear = intPtr(n)
-				}
-			}
-		}
-		break
 	}
 
 	if si, err := f.GetStreamInfo(); err == nil && si != nil {
@@ -154,17 +82,65 @@ func readFLAC(path string, in *db.TrackInput) error {
 		in.SampleRateHz = &sr
 		in.Channels = &ch
 	}
+	return tagErr
+}
+
+func readCommonTags(path string, in *db.TrackInput) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	meta, err := mediatag.ReadFrom(f)
+	if err != nil {
+		return err
+	}
+	in.Title = strings.TrimSpace(meta.Title())
+	in.Album = strings.TrimSpace(meta.Album())
+	if artist := strings.TrimSpace(meta.Artist()); artist != "" {
+		in.Artists = splitArtists(artist)
+	}
+	in.AlbumArtist = strings.TrimSpace(meta.AlbumArtist())
+	if genre := strings.TrimSpace(meta.Genre()); genre != "" {
+		in.Genres = splitGenres(genre)
+	}
+	if year := meta.Year(); year > 0 {
+		in.Year = intPtr(year)
+		in.AlbumYear = intPtr(year)
+	}
+	if track, _ := meta.Track(); track > 0 {
+		in.TrackNumber = intPtr(track)
+	}
+	if disc, _ := meta.Disc(); disc > 0 {
+		in.DiscNumber = intPtr(disc)
+	}
+	in.Comment = strings.TrimSpace(meta.Comment())
 	return nil
 }
 
-func firstComment(tag *id3v2.Tag) string {
-	frames := tag.GetFrames(tag.CommonID("Comments"))
-	for _, f := range frames {
-		if cf, ok := f.(id3v2.CommentFrame); ok {
-			return strings.TrimSpace(cf.Text)
-		}
+func readMP3Duration(path string) (int64, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, false
 	}
-	return ""
+	defer f.Close()
+	decoder := mp3.NewDecoder(f)
+	var (
+		frame    mp3.Frame
+		skipped  int
+		duration int64
+	)
+	for {
+		err := decoder.Decode(&frame, &skipped)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return 0, false
+		}
+		duration += frame.Duration().Milliseconds()
+	}
+	return duration, duration > 0
 }
 
 func parseNumBeforeSlash(s string) (int, bool) {

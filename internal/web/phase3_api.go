@@ -48,7 +48,7 @@ func (s *Server) handleAuthRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Auth.SetSessionCookie(w, sess.ID)
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"user":  map[string]any{"id": u.ID, "username": u.Username},
+		"user":  userPublic(u),
 		"token": sess.ID,
 	})
 }
@@ -70,7 +70,7 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Auth.SetSessionCookie(w, sess.ID)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"user":  map[string]any{"id": u.ID, "username": u.Username},
+		"user":  userPublic(u),
 		"token": sess.ID,
 	})
 }
@@ -96,10 +96,46 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSON(w, http.StatusOK, userPublic(u))
+}
+
+type passwordBody struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
+func (s *Server) handleAuthPassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	u := auth.UserFrom(r.Context())
+	if u == nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	var body passwordBody
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if err := s.Auth.ChangePassword(u.ID, body.CurrentPassword, body.NewPassword); err != nil {
+		code := http.StatusBadRequest
+		if strings.Contains(err.Error(), "incorrect") {
+			code = http.StatusUnauthorized
+		}
+		writeJSON(w, code, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func userPublic(u *db.User) map[string]any {
+	return map[string]any{
 		"id":       u.ID,
 		"username": u.Username,
-	})
+		"is_admin": u.IsAdmin,
+	}
 }
 
 type createSessionBody struct {

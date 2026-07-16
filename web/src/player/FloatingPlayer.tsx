@@ -393,8 +393,8 @@ export function FloatingPlayer() {
           <button
             type="button"
             className={`btn-icon btn-transport${trackFeedback === "dislike" ? " is-active" : ""}`}
-            aria-label="Dislike"
-            title="Dislike"
+            aria-label="Dislike and skip"
+            title="Dislike and skip to next"
             aria-pressed={trackFeedback === "dislike"}
             onClick={() => void feedback("dislike")}
           >

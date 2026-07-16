@@ -1,7 +1,7 @@
 // Copyright (C) 2026 martinsah
 // SPDX-License-Identifier: GPL-3.0-only
 // Author: martinsah
-// Date: 2026-07-15
+// Date: 2026-07-16
 
 package web
 
@@ -113,9 +113,11 @@ func (s *Server) handleCatalogAlbums(w http.ResponseWriter, r *http.Request, res
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	trackRows := trackJSONList(tracks)
+	s.enrichTrackMaps(r, trackRows)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"album":  albumJSON(al),
-		"tracks": trackJSONList(tracks),
+		"tracks": trackRows,
 	})
 }
 
@@ -131,7 +133,9 @@ func (s *Server) handleCatalogTracks(w http.ResponseWriter, r *http.Request, res
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 				return
 			}
-			writeJSON(w, http.StatusOK, map[string]any{"tracks": trackJSONList(tracks)})
+			trackRows := trackJSONList(tracks)
+			s.enrichTrackMaps(r, trackRows)
+			writeJSON(w, http.StatusOK, map[string]any{"tracks": trackRows})
 			return
 		}
 		q := r.URL.Query().Get("q")
@@ -141,7 +145,9 @@ func (s *Server) handleCatalogTracks(w http.ResponseWriter, r *http.Request, res
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"tracks": trackJSONList(tracks)})
+		trackRows := trackJSONList(tracks)
+		s.enrichTrackMaps(r, trackRows)
+		writeJSON(w, http.StatusOK, map[string]any{"tracks": trackRows})
 		return
 	}
 	id, err := strconv.ParseInt(rest[0], 10, 64)
@@ -154,7 +160,9 @@ func (s *Server) handleCatalogTracks(w http.ResponseWriter, r *http.Request, res
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
 	}
-	writeJSON(w, http.StatusOK, trackJSON(t))
+	row := trackJSON(t)
+	s.enrichTrackMaps(r, []map[string]any{row})
+	writeJSON(w, http.StatusOK, row)
 }
 
 func (s *Server) handleCatalogYears(w http.ResponseWriter, r *http.Request, rest []string) {
@@ -182,9 +190,11 @@ func (s *Server) handleCatalogYears(w http.ResponseWriter, r *http.Request, rest
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	trackRows := trackJSONList(tracks)
+	s.enrichTrackMaps(r, trackRows)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"year":   year,
-		"tracks": trackJSONList(tracks),
+		"tracks": trackRows,
 	})
 }
 

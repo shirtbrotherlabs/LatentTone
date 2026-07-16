@@ -123,6 +123,25 @@ Catalog browse and `/api/v1/playlists` remain unauthenticated operator tools. Se
 
 Auth-bound CRUD under `/api/v1/me/playlists*` (ADR-008). Neighbor generate stays at `/api/v1/playlists`.
 
+### Admin vs users
+
+Set bootstrap credentials in `.env` (Compose passes them into `browse`):
+
+```bash
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=changeme-please
+```
+
+On `serve` startup, if that username is missing it is created with `is_admin=1`. Existing admins keep their password across restarts; change it in Settings (`POST /api/v1/auth/password`).
+
+| Capability | Admin | Non-admin |
+|------------|-------|-----------|
+| Register / listen / playlists / radio prefs | yes | yes |
+| View library + acoustic scan status | yes | yes |
+| Start/stop library scan or acoustic embed | yes | no (403) |
+
+`GET /api/v1/auth/me` includes `is_admin`.
+
 ```bash
 TOKEN=...  # from register/login
 

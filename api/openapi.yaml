@@ -164,6 +164,36 @@ paths:
         '401':
           $ref: '#/components/responses/Error'
 
+  /api/v1/auth/password:
+    post:
+      tags: [auth]
+      summary: Change password
+      description: Authenticated user changes their own password (admin included).
+      operationId: authChangePassword
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password:
+                  type: string
+                  format: password
+                new_password:
+                  type: string
+                  format: password
+                  minLength: 8
+      responses:
+        '200':
+          description: OK
+        '401':
+          $ref: '#/components/responses/Error'
+
   /api/v1/sessions:
     post:
       tags: [sessions]
@@ -953,10 +983,12 @@ paths:
       summary: Catalog library scan status
       description: |
         Whether a full catalog/metadata scan is running, last result summary,
-        and artist/album/track counts. Catalog scan is not cancellable once
-        started (`stoppable` is always false).
+        and artist/album/track counts. Requires any authenticated user.
+        Catalog scan is not cancellable once started (`stoppable` is always false).
       operationId: scanStatus
-      security: []
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
       responses:
         '200':
           description: OK
@@ -964,17 +996,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ScanStatus'
+        '401':
+          $ref: '#/components/responses/Error'
 
   /api/scan/start:
     post:
       tags: [scan]
       summary: Start catalog library scan
       description: |
-        Starts a full library reconcile (tags → SQLite catalog). Returns 409 if
-        a scan is already running. There is no stop API — the scanner does not
-        support mid-run cancellation.
+        Starts a full library reconcile (tags → SQLite catalog). **Admin only.**
+        Returns 409 if a scan is already running. There is no stop API.
       operationId: scanStart
-      security: []
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
       responses:
         '200':
           description: Scan started
@@ -982,6 +1017,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/JobAck'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
         '409':
           $ref: '#/components/responses/Error'
 
@@ -990,10 +1029,12 @@ paths:
       tags: [embed]
       summary: Start acoustic identity / embed job
       description: |
-        JSON twin of operator `POST /embed/start`. Starts configured extractors
-        (Essentia / YAMNet / MusiCNN) against pending catalog tracks.
+        JSON twin of operator `POST /embed/start`. **Admin only.** Starts configured
+        extractors against pending catalog tracks.
       operationId: embedStart
-      security: []
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
       responses:
         '200':
           description: Embed started
@@ -1001,6 +1042,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/JobAck'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
         '409':
           $ref: '#/components/responses/Error'
         '503':
@@ -1011,10 +1056,12 @@ paths:
       tags: [embed]
       summary: Stop acoustic identity / embed job
       description: |
-        JSON twin of operator `POST /embed/stop`. Requests cancellation of a
-        running embed controller job.
+        JSON twin of operator `POST /embed/stop`. **Admin only.** Requests cancellation
+        of a running embed controller job.
       operationId: embedStop
-      security: []
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
       responses:
         '200':
           description: Stop requested
@@ -1022,6 +1069,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/JobAck'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
         '503':
           $ref: '#/components/responses/Error'
 
@@ -1030,10 +1081,12 @@ paths:
       tags: [embed]
       summary: Embed / acoustic scan status
       description: |
-        Operator job progress JSON (also served as HTML twin at `/embed/status`
-        for browsers). Includes catalog coverage counters and per-scanner rows.
+        Job progress JSON for any authenticated user. Includes catalog coverage
+        counters and per-scanner rows.
       operationId: embedStatus
-      security: []
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
       responses:
         '200':
           description: OK
@@ -1041,6 +1094,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/EmbedStatus'
+        '401':
+          $ref: '#/components/responses/Error'
 
 components:
   securitySchemes:
@@ -1102,7 +1157,10 @@ components:
           format: int64
         username:
           type: string
-      required: [id, username]
+        is_admin:
+          type: boolean
+          description: True for the env-bootstrapped admin account
+      required: [id, username, is_admin]
 
     RadioPrefs:
       type: object

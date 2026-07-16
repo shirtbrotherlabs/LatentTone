@@ -14,9 +14,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/shirtbrotherlabs/LatentTone/internal/auth"
 	"github.com/shirtbrotherlabs/LatentTone/internal/config"
 	"github.com/shirtbrotherlabs/LatentTone/internal/db"
 	"github.com/shirtbrotherlabs/LatentTone/internal/meta"
@@ -180,6 +182,14 @@ func runServe(args []string) int {
 	if err != nil {
 		log.Println(err)
 		return 1
+	}
+
+	if err := auth.BootstrapAdmin(catalog, cfg.AdminUsername, cfg.AdminPassword); err != nil {
+		log.Printf("admin bootstrap: %v", err)
+		return 1
+	}
+	if strings.TrimSpace(cfg.AdminUsername) != "" {
+		log.Printf("admin account ready (username=%s)", cfg.AdminUsername)
 	}
 
 	if *scanOnStart {

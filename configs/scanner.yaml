@@ -34,6 +34,12 @@ cover_names:
   - AlbumArt.jpg
   - albumart.jpg
 
+# When no sidecar cover file (above) is found, embedded art (ID3v2 APIC / FLAC
+# PICTURE) is extracted from a track and cached here. The library is mounted
+# read-only, so extracted covers live in this writable dir; the /covers/ handler
+# falls back to it automatically. Paths mirror the album's library-relative dir.
+cover_cache_dir: /data/covers
+
 # Periodic full reconcile interval (0 disables periodic scans when serving)
 scan_interval: 1h
 

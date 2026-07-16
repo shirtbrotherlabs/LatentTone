@@ -83,6 +83,39 @@ func TestSkipAdvancesAndIsolation(t *testing.T) {
 	}
 }
 
+func TestDislikeAdvancesNowPlaying(t *testing.T) {
+	catalog, userID, _, id1, id2, id3 := seedDB(t)
+	defer catalog.Close()
+
+	w := session.NewWorker(catalog, nil, 4, 2)
+	w.Neighbors = func(ctx context.Context, seedTrackID int64, k int) ([]affinity.Neighbor, error) {
+		return []affinity.Neighbor{
+			{TrackID: id2, Score: 0.9},
+			{TrackID: id3, Score: 0.8},
+		}, nil
+	}
+
+	ctx := context.Background()
+	live, err := w.Create(ctx, userID, id1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := live.NowPlayingID
+	if err := w.ApplyFeedback(ctx, live, db.SignalDislike, before); err != nil {
+		t.Fatal(err)
+	}
+	if live.NowPlayingID == before {
+		t.Fatal("expected advance on dislike of now_playing")
+	}
+	skips, err := catalog.ListSkippedTrackIDs(userID, live.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := skips[before]; !ok {
+		t.Fatal("dislike should session-skip the disliked track")
+	}
+}
+
 func TestCompleteAdvancesWithoutSkip(t *testing.T) {
 	catalog, userID, _, id1, id2, id3 := seedDB(t)
 	defer catalog.Close()

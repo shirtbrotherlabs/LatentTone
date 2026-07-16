@@ -2,7 +2,7 @@
  * Copyright (C) 2026 martinsah
  * SPDX-License-Identifier: GPL-3.0-only
  * Author: martinsah
- * Date: 2026-07-15
+ * Date: 2026-07-16
  */
 
 @import "./tokens.css";
@@ -344,6 +344,94 @@ textarea {
 .track-meta {
   font-size: 0.8rem;
   color: var(--ink-muted);
+}
+
+.track-table-cover-col {
+  width: 2.75rem;
+  padding-right: 0.25rem;
+}
+
+.track-table-cover {
+  width: 40px;
+  height: 40px;
+  border-radius: 4px;
+  object-fit: cover;
+  display: block;
+  background: var(--surface-2);
+}
+
+.track-table-cover-fallback {
+  background: linear-gradient(135deg, var(--surface-2), var(--surface-3));
+}
+
+.track-table-title-line {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.track-table-year-col,
+.track-table-duration-col,
+.track-table-plays-col {
+  white-space: nowrap;
+}
+
+.track-table-year-col {
+  width: 4rem;
+}
+
+.track-table-duration-col {
+  width: 3.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.track-table-plays-col {
+  width: 3.5rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.track-table-rating-col {
+  width: 3.25rem;
+}
+
+.track-table-actions-col {
+  width: 2.5rem;
+}
+
+.track-table-trailing-col {
+  width: 5.5rem;
+  text-align: right;
+}
+
+.track-table-thumbs {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  color: var(--ink-faint);
+}
+
+.track-table-thumbs .is-on {
+  color: var(--accent-strong);
+}
+
+.track-table-thumb-icon {
+  width: 0.95rem;
+  height: 0.95rem;
+  display: block;
+}
+
+.track-table-row-now {
+  background: rgba(212, 165, 116, 0.08);
+}
+
+.track-table-row-past {
+  opacity: 0.82;
+}
+
+.track-table-row-next {
+  opacity: 0.95;
 }
 
 .row-actions {
@@ -1067,24 +1155,24 @@ textarea {
 }
 
 .seed-grid {
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: var(--space-2);
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 3px;
 }
 
 .seed-tile {
   display: flex;
   align-items: center;
-  gap: 1px;
+  gap: 0.55rem;
   text-align: left;
   cursor: pointer;
   color: inherit;
   width: 100%;
-  padding: 1px;
+  padding: 0.5rem 0.6rem;
 }
 
 .seed-cover {
-  width: 40px;
-  height: 40px;
+  width: 52px;
+  height: 52px;
   border-radius: 6px;
   object-fit: cover;
   flex: 0 0 auto;

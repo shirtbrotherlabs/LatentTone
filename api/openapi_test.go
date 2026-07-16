@@ -44,6 +44,7 @@ func TestOpenAPIYAMLSkeleton(t *testing.T) {
 		"/api/v1/auth/login",
 		"/api/v1/auth/logout",
 		"/api/v1/auth/me",
+		"/api/v1/auth/password",
 		"/api/v1/sessions",
 		"/api/v1/sessions/{id}",
 		"/api/v1/sessions/{id}/feedback",

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/glebarez/go-sqlite"
@@ -22,7 +23,8 @@ var migrationFS embed.FS
 
 // DB wraps the catalog SQLite connection.
 type DB struct {
-	SQL *sql.DB
+	SQL     *sql.DB
+	writeMu sync.Mutex
 }
 
 // Open opens (or creates) the catalog database, enables WAL, and applies migrations.
@@ -30,11 +32,17 @@ func Open(path string) (*DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create db dir: %w", err)
 	}
-	sqlDB, err := sql.Open("sqlite", path+"?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)")
+	// WAL allows concurrent readers; busy_timeout retries instead of failing
+	// immediately when embed/scan writers briefly lock the DB.
+	sqlDB, err := sql.Open("sqlite", path+"?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
-	sqlDB.SetMaxOpenConns(1)
+	// Multiple conns let catalog reads proceed while embed workers write.
+	// SQLite still serializes writers under WAL; keep the pool modest.
+	sqlDB.SetMaxOpenConns(8)
+	sqlDB.SetMaxIdleConns(8)
+	sqlDB.SetConnMaxLifetime(0)
 	if _, err := sqlDB.Exec(`PRAGMA foreign_keys = ON;`); err != nil {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("pragma: %w", err)
@@ -42,6 +50,10 @@ func Open(path string) (*DB, error) {
 	if _, err := sqlDB.Exec(`PRAGMA journal_mode = WAL;`); err != nil {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("wal: %w", err)
+	}
+	if _, err := sqlDB.Exec(`PRAGMA busy_timeout = 5000;`); err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("busy_timeout: %w", err)
 	}
 	d := &DB{SQL: sqlDB}
 	if err := d.migrate(); err != nil {

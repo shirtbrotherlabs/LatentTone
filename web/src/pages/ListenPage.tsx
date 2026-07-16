@@ -2,13 +2,14 @@
  * Copyright (C) 2026 martinsah
  * SPDX-License-Identifier: GPL-3.0-only
  * Author: martinsah
- * Date: 2026-07-15
+ * Date: 2026-07-16
  */
 
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import type { CatalogTrack, QueueTrack, Station } from "../api/types";
+import { TrackTable, type TrackTableRow } from "../components/TrackTable";
 import { usePlayer } from "../player/PlayerContext";
 
 function stationCover(st: Station): string | undefined {
@@ -36,95 +37,14 @@ function stationSubtitle(st: Station): string {
   return artist || "Stopped station";
 }
 
-function ThumbUpMini({ filled }: { filled?: boolean }) {
-  return (
-    <svg className="queue-thumb-icon" viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        fill={filled ? "currentColor" : "none"}
-        stroke="currentColor"
-        strokeWidth={filled ? 0 : 1.7}
-        d="M10.8 20.2H6.4c-.9 0-1.6-.7-1.6-1.6v-6.1c0-.5.2-1 .6-1.3l5.2-4.5c.5-.4 1.2-.5 1.8-.2.7.3 1.1 1 1.1 1.8v2.3h3.7c1.3 0 2.3 1.2 2.1 2.5l-.9 5.2c-.2 1.1-1.2 1.9-2.3 1.9h-5.3z"
-      />
-    </svg>
-  );
-}
-
-function ThumbDownMini({ filled }: { filled?: boolean }) {
-  return (
-    <svg className="queue-thumb-icon" viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        fill={filled ? "currentColor" : "none"}
-        stroke="currentColor"
-        strokeWidth={filled ? 0 : 1.7}
-        d="M13.2 3.8h4.4c.9 0 1.6.7 1.6 1.6v6.1c0 .5-.2 1-.6 1.3l-5.2 4.5c-.5.4-1.2.5-1.8.2-.7-.3-1.1-1-1.1-1.8v-2.3H6.8c-1.3 0-2.3-1.2-2.1-2.5l.9-5.2c.2-1.1 1.2-1.9 2.3-1.9h5.3z"
-      />
-    </svg>
-  );
-}
-
-function TrackRow({
-  track,
-  badge,
-  className,
-}: {
-  track: CatalogTrack | QueueTrack;
-  badge?: ReactNode;
-  className?: string;
-}) {
+function asTableRow(track: CatalogTrack | QueueTrack): TrackTableRow {
   const q = track as QueueTrack;
-  const liked = q.feedback === "like";
-  const disliked = q.feedback === "dislike";
-  const plays = typeof q.play_count === "number" ? q.play_count : 0;
-
-  return (
-    <li className={`queue-row ${className ?? ""}`.trim()}>
-      {track.cover_url ? (
-        <img className="queue-cover" src={track.cover_url} alt="" />
-      ) : (
-        <div className="queue-cover queue-cover-fallback" aria-hidden />
-      )}
-      <div className="queue-row-text">
-        <div className="queue-row-title-line">
-          <Link className="track-title" to={`/library/tracks/${track.id}`}>
-            {track.title}
-          </Link>
-          {badge}
-          <span className="queue-thumbs" aria-label={liked ? "Liked" : disliked ? "Disliked" : "No rating"}>
-            <span className={liked ? "is-on" : undefined} title="Like">
-              <ThumbUpMini filled={liked} />
-            </span>
-            <span className={disliked ? "is-on" : undefined} title="Dislike">
-              <ThumbDownMini filled={disliked} />
-            </span>
-          </span>
-        </div>
-        <div className="queue-row-sub muted">
-          {track.artist_id ? (
-            <Link className="fp-link" to={`/library/artists/${track.artist_id}`}>
-              {track.artist || "Unknown artist"}
-            </Link>
-          ) : (
-            <span>{track.artist || "Unknown artist"}</span>
-          )}
-          {track.album ? (
-            <>
-              {" · "}
-              {track.album_id ? (
-                <Link className="fp-link" to={`/library/albums/${track.album_id}`}>
-                  {track.album}
-                </Link>
-              ) : (
-                track.album
-              )}
-            </>
-          ) : null}
-          {" · "}
-          <span className="queue-plays">Plays {plays}</span>
-          {"source" in track && (track as QueueTrack).source === "user_pin" ? " · pinned" : ""}
-        </div>
-      </div>
-    </li>
-  );
+  return {
+    ...track,
+    id: track.id,
+    feedback: q.feedback ?? track.feedback,
+    play_count: q.play_count ?? track.play_count,
+  };
 }
 
 export function ListenPage() {
@@ -187,8 +107,8 @@ export function ListenPage() {
   const currentAsTrack: QueueTrack | null = nowTrack
     ? {
         ...nowTrack,
-        feedback: trackFeedback ?? status?.now_playing?.feedback,
-        play_count: status?.now_playing?.play_count,
+        feedback: trackFeedback ?? status?.now_playing?.feedback ?? nowTrack.feedback,
+        play_count: status?.now_playing?.play_count ?? nowTrack.play_count,
       }
     : trackId
       ? {
@@ -276,24 +196,21 @@ export function ListenPage() {
             {historyTracks.length > 0 ? (
               <>
                 <h2 className="queue-heading">Recently played</h2>
-                <ol className="queue-list queue-list-rich">
-                  {historyTracks.map((t, idx) => (
-                    <TrackRow key={`h-${t.id}-${idx}`} track={t} className="queue-row-past" />
-                  ))}
-                </ol>
+                <TrackTable
+                  tracks={historyTracks.map(asTableRow)}
+                  rowClassName={() => "track-table-row-past"}
+                />
               </>
             ) : null}
 
             {currentAsTrack ? (
               <>
                 <h2 className="queue-heading">Now</h2>
-                <ol className="queue-list queue-list-rich">
-                  <TrackRow
-                    track={currentAsTrack}
-                    className="queue-row-now"
-                    badge={<span className="queue-badge">Playing</span>}
-                  />
-                </ol>
+                <TrackTable
+                  tracks={[asTableRow(currentAsTrack)]}
+                  rowClassName={() => "track-table-row-now"}
+                  renderTitleBadge={() => <span className="queue-badge">Playing</span>}
+                />
               </>
             ) : null}
 
@@ -301,11 +218,10 @@ export function ListenPage() {
             {queueTracks.length === 0 ? (
               <p className="muted">No upcoming tracks yet — affinity will fill the queue.</p>
             ) : (
-              <ol className="queue-list queue-list-rich">
-                {queueTracks.map((t, idx) => (
-                  <TrackRow key={`q-${t.id}-${idx}`} track={t} className="queue-row-next" />
-                ))}
-              </ol>
+              <TrackTable
+                tracks={queueTracks.map(asTableRow)}
+                rowClassName={() => "track-table-row-next"}
+              />
             )}
           </div>
         </div>

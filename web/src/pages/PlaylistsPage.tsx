@@ -2,14 +2,14 @@
  * Copyright (C) 2026 martinsah
  * SPDX-License-Identifier: GPL-3.0-only
  * Author: martinsah
- * Date: 2026-07-15
+ * Date: 2026-07-16
  */
 
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { CatalogTrack, Playlist, PlaylistHeader } from "../api/types";
-import { TrackActions, formatDuration } from "../components/TrackActions";
+import type { Playlist, PlaylistHeader } from "../api/types";
+import { TrackTable, type TrackTableRow } from "../components/TrackTable";
 import { usePlayer } from "../player/PlayerContext";
 
 export function PlaylistsPage() {
@@ -77,6 +77,23 @@ export function PlaylistsPage() {
   );
 }
 
+function playlistTrackRows(tracks: Playlist["tracks"]): TrackTableRow[] {
+  return (tracks ?? []).map((t) => ({
+    id: t.id ?? t.track_id,
+    track_id: t.track_id,
+    title: t.title || `Track ${t.track_id}`,
+    artist: t.artist || "",
+    album: t.album || "",
+    duration_ms: t.duration_ms,
+    year: t.year,
+    album_id: t.album_id,
+    artist_id: t.artist_id,
+    cover_url: t.cover_url,
+    feedback: t.feedback,
+    play_count: t.play_count,
+  }));
+}
+
 export function PlaylistDetailPage() {
   const { id } = useParams();
   const [pl, setPl] = useState<Playlist | null>(null);
@@ -102,15 +119,7 @@ export function PlaylistDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  const tracksAsCatalog = (pl?.tracks ?? []).map(
-    (t): CatalogTrack => ({
-      id: t.track_id,
-      title: t.title || `Track ${t.track_id}`,
-      artist: t.artist || "",
-      album: t.album || "",
-      duration_ms: t.duration_ms,
-    }),
-  );
+  const tracks = playlistTrackRows(pl?.tracks);
 
   if (error) return <p className="error">{error}</p>;
   if (!pl) return <p className="muted">Loading…</p>;
@@ -133,11 +142,11 @@ export function PlaylistDetailPage() {
         <button className="btn" type="submit">
           Rename
         </button>
-        {tracksAsCatalog[0] ? (
+        {tracks[0] ? (
           <button
             type="button"
             className="btn btn-ghost"
-            onClick={() => void startRadio(tracksAsCatalog[0].id)}
+            onClick={() => void startRadio(tracks[0].id)}
           >
             Listen from first track
           </button>
@@ -153,49 +162,23 @@ export function PlaylistDetailPage() {
         </button>
       </form>
 
-      <table className="track-table">
-        <thead>
-          <tr>
-            <th>#</th>
-            <th>Title</th>
-            <th>Artist</th>
-            <th>Time</th>
-            <th />
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {tracksAsCatalog.map((t, idx) => (
-            <tr key={`${t.id}-${idx}`}>
-              <td className="track-meta">{idx + 1}</td>
-              <td>
-                <Link className="track-title" to={`/library/tracks/${t.id}`}>
-                  {t.title}
-                </Link>
-              </td>
-              <td className="track-meta">{t.artist}</td>
-              <td className="track-meta">{formatDuration(t.duration_ms)}</td>
-              <td>
-                <TrackActions track={t} />
-              </td>
-              <td>
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  onClick={() =>
-                    void api
-                      .removePlaylistTrack(pl.id, t.id)
-                      .then(setPl)
-                      .catch((err) => setError(err instanceof Error ? err.message : "failed"))
-                  }
-                >
-                  Remove
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <TrackTable
+        tracks={tracks}
+        renderTrailing={(t) => (
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() =>
+              void api
+                .removePlaylistTrack(pl.id, t.id)
+                .then(setPl)
+                .catch((err) => setError(err instanceof Error ? err.message : "failed"))
+            }
+          >
+            Remove
+          </button>
+        )}
+      />
     </section>
   );
 }

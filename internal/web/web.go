@@ -152,15 +152,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/playlists/", s.handlePlaylistPage)
 	mux.HandleFunc("/lance", s.handleLance)
 	mux.HandleFunc("/covers/", s.handleCover)
-	mux.HandleFunc("/scan", s.handleScan)
-	mux.HandleFunc("/embed/start", s.handleEmbedStart)
-	mux.HandleFunc("/embed/stop", s.handleEmbedStop)
-	mux.HandleFunc("/embed/status", s.handleEmbedStatus)
-	mux.HandleFunc("/api/scan/status", s.handleAPIScanStatus)
-	mux.HandleFunc("/api/scan/start", s.handleAPIScanStart)
-	mux.HandleFunc("/api/embed/start", s.handleAPIEmbedStart)
-	mux.HandleFunc("/api/embed/stop", s.handleAPIEmbedStop)
-	mux.HandleFunc("/api/embed/status", s.handleEmbedStatus)
+	mux.HandleFunc("/scan", auth.RequireAdmin(s.handleScan))
+	mux.HandleFunc("/embed/start", auth.RequireAdmin(s.handleEmbedStart))
+	mux.HandleFunc("/embed/stop", auth.RequireAdmin(s.handleEmbedStop))
+	mux.HandleFunc("/embed/status", auth.RequireUser(s.handleEmbedStatus))
+	mux.HandleFunc("/api/scan/status", auth.RequireUser(s.handleAPIScanStatus))
+	mux.HandleFunc("/api/scan/start", auth.RequireAdmin(s.handleAPIScanStart))
+	mux.HandleFunc("/api/embed/start", auth.RequireAdmin(s.handleAPIEmbedStart))
+	mux.HandleFunc("/api/embed/stop", auth.RequireAdmin(s.handleAPIEmbedStop))
+	mux.HandleFunc("/api/embed/status", auth.RequireUser(s.handleEmbedStatus))
 	mux.HandleFunc("/api/v1/playlists", s.handleAPIPlaylists)
 	mux.HandleFunc("/api/v1/playlists/", s.handleAPIPlaylist)
 	mux.HandleFunc("/api/v1/me/playlists", s.handleMePlaylists)
@@ -174,6 +174,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/auth/login", s.handleAuthLogin)
 	mux.HandleFunc("/api/v1/auth/logout", s.handleAuthLogout)
 	mux.HandleFunc("/api/v1/auth/me", s.handleAuthMe)
+	mux.HandleFunc("/api/v1/auth/password", auth.RequireUser(s.handleAuthPassword))
 	mux.HandleFunc("/api/v1/sessions", s.handleSessions)
 	mux.HandleFunc("/api/v1/sessions/", s.handleSessions)
 	mux.HandleFunc("/api/v1/tracks/", s.handleAPITracks)
@@ -509,7 +510,7 @@ func (s *Server) handleAPIPlaylist(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, 200, playlistJSON(pl, entries))
+	s.writePlaylistJSON(w, r, 200, pl, entries)
 }
 
 func (s *Server) apiCreatePlaylist(w http.ResponseWriter, r *http.Request) {
@@ -537,7 +538,7 @@ func (s *Server) apiCreatePlaylist(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, 400, err.Error())
 		return
 	}
-	writeJSON(w, 201, playlistJSON(res.Playlist, res.Entries))
+	s.writePlaylistJSON(w, r, 201, res.Playlist, res.Entries)
 }
 
 func playlistHeaderJSON(pl *db.Playlist) map[string]any {
@@ -578,11 +579,22 @@ func playlistJSON(pl *db.Playlist, entries []db.PlaylistEntry) map[string]any {
 			row["score"] = e.Score.Float64
 		}
 		if e.Track != nil {
+			row["id"] = e.TrackID
 			row["title"] = e.Track.Title
 			row["artist"] = e.Track.ArtistName
 			row["album"] = e.Track.AlbumTitle
+			row["year"] = nullIntJSON(e.Track.Year)
 			if e.Track.DurationMS.Valid {
 				row["duration_ms"] = e.Track.DurationMS.Int64
+			}
+			if e.Track.AlbumID.Valid {
+				row["album_id"] = e.Track.AlbumID.Int64
+			}
+			if e.Track.ArtistID.Valid {
+				row["artist_id"] = e.Track.ArtistID.Int64
+			}
+			if e.Track.CoverPath.Valid && e.Track.CoverPath.String != "" {
+				row["cover_url"] = "/covers/" + e.Track.CoverPath.String
 			}
 		}
 		tracks = append(tracks, row)
@@ -617,7 +629,28 @@ func (s *Server) handleCover(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	http.ServeFile(w, r, abs)
+	serveCover := func(path string) {
+		// Covers rarely change; let the browser keep them across navigations.
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		http.ServeFile(w, r, path)
+	}
+	if _, err := os.Stat(abs); err == nil {
+		serveCover(abs)
+		return
+	}
+	// Fall back to extracted embedded art in the (writable) cover cache, which
+	// mirrors the album's library-relative path. The read-only library never
+	// contains these files.
+	if cache := filepath.Clean(s.Cfg.CoverCacheDir); cache != "" && cache != "." {
+		cabs := filepath.Clean(filepath.Join(cache, filepath.FromSlash(rel)))
+		if cabs == cache || strings.HasPrefix(cabs, cache+string(filepath.Separator)) {
+			if _, err := os.Stat(cabs); err == nil {
+				serveCover(cabs)
+				return
+			}
+		}
+	}
+	http.NotFound(w, r)
 }
 
 func (s *Server) handleLance(w http.ResponseWriter, r *http.Request) {

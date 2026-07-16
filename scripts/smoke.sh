@@ -45,6 +45,7 @@ if [[ ! -s /tmp/lt-app.html ]]; then
 fi
 
 bash "$ROOT/scripts/spa_smoke.sh"
+bash "$ROOT/scripts/catalog_perf_smoke.sh"
 
 curl -fsS "http://127.0.0.1:${BROWSE_PORT}/browse" -o /tmp/lt-browse.html
 grep -qi "LatentTone" /tmp/lt-browse.html

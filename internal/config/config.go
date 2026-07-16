@@ -20,15 +20,16 @@ const DefaultPublicBaseURL = "https://latent.lt.lkeng.org"
 
 // Config is the scanner / browse / Phase 3 service configuration (scanner.yaml).
 type Config struct {
-	LibraryRoot  string        `yaml:"library_root"`
-	DatabasePath string        `yaml:"database_path"`
-	Extensions   []string      `yaml:"extensions"`
-	Include      []string      `yaml:"include"`
-	Exclude      []string      `yaml:"exclude"`
-	Concurrency  int           `yaml:"concurrency"`
-	CoverNames   []string      `yaml:"cover_names"`
-	ScanInterval time.Duration `yaml:"scan_interval"`
-	ListenAddr   string        `yaml:"listen_addr"`
+	LibraryRoot   string        `yaml:"library_root"`
+	DatabasePath  string        `yaml:"database_path"`
+	Extensions    []string      `yaml:"extensions"`
+	Include       []string      `yaml:"include"`
+	Exclude       []string      `yaml:"exclude"`
+	Concurrency   int           `yaml:"concurrency"`
+	CoverNames    []string      `yaml:"cover_names"`
+	CoverCacheDir string        `yaml:"cover_cache_dir"`
+	ScanInterval  time.Duration `yaml:"scan_interval"`
+	ListenAddr    string        `yaml:"listen_addr"`
 
 	// PublicBaseURL is the self-referenced / reverse-proxied canonical origin
 	// (no trailing slash). Overridden by PUBLIC_BASE_URL or LATENTTONE_PUBLIC_URL.
@@ -46,6 +47,10 @@ type Config struct {
 	QueuePrefetch     int           `yaml:"queue_prefetch"`
 	FFmpegPath        string        `yaml:"ffmpeg_path"`
 	SPARoot           string        `yaml:"spa_root"` // Phase 4 product SPA static root
+
+	// Admin bootstrap (env only — never commit real passwords).
+	AdminUsername string `yaml:"-"`
+	AdminPassword string `yaml:"-"`
 }
 
 // Load reads and validates scanner configuration from path.
@@ -82,6 +87,9 @@ func (c *Config) applyDefaults() {
 	if len(c.CoverNames) == 0 {
 		c.CoverNames = []string{"cover.jpg", "cover.png", "folder.jpg", "folder.png"}
 	}
+	if c.CoverCacheDir == "" {
+		c.CoverCacheDir = "/data/covers"
+	}
 	if c.ListenAddr == "" {
 		c.ListenAddr = ":8080"
 	}
@@ -112,14 +120,18 @@ func (c *Config) applyDefaults() {
 	c.PublicBaseURL = NormalizePublicBaseURL(c.PublicBaseURL)
 }
 
-// applyEnv overlays PUBLIC_BASE_URL / LATENTTONE_PUBLIC_URL (compose-friendly).
+// applyEnv overlays PUBLIC_BASE_URL / LATENTTONE_PUBLIC_URL and admin bootstrap vars.
 func (c *Config) applyEnv() {
 	if v := strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL")); v != "" {
 		c.PublicBaseURL = NormalizePublicBaseURL(v)
-		return
-	}
-	if v := strings.TrimSpace(os.Getenv("LATENTTONE_PUBLIC_URL")); v != "" {
+	} else if v := strings.TrimSpace(os.Getenv("LATENTTONE_PUBLIC_URL")); v != "" {
 		c.PublicBaseURL = NormalizePublicBaseURL(v)
+	}
+	if v := strings.TrimSpace(os.Getenv("ADMIN_USERNAME")); v != "" {
+		c.AdminUsername = v
+	}
+	if v := os.Getenv("ADMIN_PASSWORD"); strings.TrimSpace(v) != "" {
+		c.AdminPassword = v
 	}
 }
 

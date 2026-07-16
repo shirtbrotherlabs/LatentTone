@@ -2,12 +2,13 @@
  * Copyright (C) 2026 martinsah
  * SPDX-License-Identifier: GPL-3.0-only
  * Author: martinsah
- * Date: 2026-07-15
+ * Date: 2026-07-16
  */
 
 export type User = {
   id: number;
   username: string;
+  is_admin?: boolean;
 };
 
 /** Runtime deployment hints from GET /api/v1/config (no auth). */
@@ -53,6 +54,10 @@ export type CatalogTrack = {
   year?: number | null;
   genres?: string;
   cover_url?: string;
+  /** Per-user like/dislike when API-enriched. */
+  feedback?: "like" | "dislike" | string;
+  /** Global play count when API-enriched. */
+  play_count?: number;
 };
 
 export type CatalogAlbum = {
@@ -85,11 +90,19 @@ export type PlaylistHeader = {
 export type PlaylistTrack = {
   position: number;
   track_id: number;
+  /** Alias for track_id when present in playlist detail payloads. */
+  id?: number;
   score?: number;
   title?: string;
   artist?: string;
   album?: string;
-  duration_ms?: number;
+  duration_ms?: number | null;
+  year?: number | null;
+  album_id?: number;
+  artist_id?: number;
+  cover_url?: string;
+  feedback?: "like" | "dislike" | string;
+  play_count?: number;
 };
 
 export type Playlist = PlaylistHeader & {

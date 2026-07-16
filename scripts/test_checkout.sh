@@ -20,14 +20,16 @@ usage() {
 Usage: ./scripts/test_checkout.sh [--ref REF] [--suite SUITE] [--keep-worktree]
 
 Suites:
-  fast    go test -mod=vendor ./...
-  browse  fast + scripts/smoke.sh (scan, SPA/operator curls)
+  fast    go test internal/db + internal/web, then go test ./...
+  browse  fast + scripts/smoke.sh (scan, SPA/operator curls, catalog_perf_smoke)
   stream  browse + scripts/stream_smoke.sh (Gate B incl. skip ×2)
   full    stream + embed profile + neighbor playlist API sanity
 
 Environment:
   MUSIC_LIBRARY   default /mnt2/media/music (mounted :ro by Compose)
   DATA_DIR        optional shared override (otherwise per-step temp dirs)
+  ARTISTS_MAX_S / ALBUMS_MAX_S / TRACKS_MAX_S / YEARS_MAX_S
+                  optional catalog_perf_smoke latency budgets (seconds)
 EOF
 }
 
@@ -79,14 +81,23 @@ step() {
   fi
 }
 
-run_go_test() {
+run_go_test_pkgs() {
+  local pkgs=("$@")
   if command -v go >/dev/null 2>&1; then
-    (cd "$RUN_ROOT" && go test -mod=vendor ./...)
+    (cd "$RUN_ROOT" && go test -mod=vendor -count=1 "${pkgs[@]}")
   else
     echo "host go not found; using docker golang:1.22-bookworm"
     docker run --rm -v "$RUN_ROOT:/src" -w /src golang:1.22-bookworm \
-      go test -mod=vendor ./...
+      go test -mod=vendor -buildvcs=false -count=1 "${pkgs[@]}"
   fi
+}
+
+run_go_test_db_web() {
+  run_go_test_pkgs ./internal/db/... ./internal/web/...
+}
+
+run_go_test() {
+  run_go_test_pkgs ./...
 }
 
 run_smoke() {
@@ -212,7 +223,8 @@ fi
 export MUSIC_LIBRARY="${MUSIC_LIBRARY:-/mnt2/media/music}"
 echo "test_checkout suite=$SUITE root=$RUN_ROOT music=$MUSIC_LIBRARY"
 
-step "go test" run_go_test
+step "go test internal/db + internal/web" run_go_test_db_web
+step "go test ./..." run_go_test
 
 if [[ "$SUITE" == "fast" ]]; then
   echo ""
@@ -220,7 +232,8 @@ if [[ "$SUITE" == "fast" ]]; then
   exit 0
 fi
 
-step "compose browse smoke" run_smoke
+# smoke.sh includes spa_smoke + catalog_perf_smoke (latency + index checks).
+step "compose browse smoke (+ catalog perf)" run_smoke
 
 if [[ "$SUITE" == "browse" ]]; then
   echo ""

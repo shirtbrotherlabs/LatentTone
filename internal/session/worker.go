@@ -583,7 +583,14 @@ func (w *Worker) ApplyFeedback(ctx context.Context, live *Live, signal string, t
 		_, _ = w.DB.UpsertAffinity(live.UserID, trackID, -0.25)
 		_ = w.DB.AddSkip(live.UserID, trackID, db.SkipScopeSession, live.ID)
 		live.Queue = filterOut(live.Queue, trackID)
-		_ = w.fillQueue(ctx, live)
+		// Player thumbs-down: leave the current track immediately (same as skip, stronger penalty).
+		if live.NowPlayingID == trackID {
+			if err := w.advanceLocked(ctx, live); err != nil {
+				return err
+			}
+		} else {
+			_ = w.fillQueue(ctx, live)
+		}
 	case db.SignalSkip:
 		_ = w.DB.AddSkip(live.UserID, trackID, db.SkipScopeSession, live.ID)
 		_, _ = w.DB.UpsertAffinity(live.UserID, trackID, -0.1)

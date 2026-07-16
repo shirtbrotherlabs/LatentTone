@@ -217,7 +217,7 @@ func (d *DB) ListPlaylistEntries(playlistID int64) ([]PlaylistEntry, error) {
 	rows, err := d.SQL.Query(`
 SELECT pt.position, pt.track_id, pt.score,
        t.id, t.album_id, t.path, t.title, t.track_number, t.disc_number,
-       t.duration_ms, t.bitrate_kbps, t.sample_rate_hz, t.channels, t.format, t.year,
+       t.duration_ms, t.bitrate_kbps, t.sample_rate_hz, t.channels, t.format, COALESCE(t.year, al.year),
        t.comment, t.missing_at,
        COALESCE(al.title, ''), COALESCE(a.name, ''), al.cover_path,
        COALESCE((SELECT GROUP_CONCAT(g.name, '|') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id), '')
