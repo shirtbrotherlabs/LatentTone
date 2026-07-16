@@ -21,6 +21,24 @@ Catalog of third-party dependencies used by LatentTone. Every added or upgraded 
 | golang.org/x/crypto | argon2id password KDF (ADR-005) | BSD-3-Clause | https://github.com/golang/crypto | v0.31.0 | `vendor/golang.org/x/crypto` |
 | swagger-ui | Embedded Swagger UI for `/api/docs` (Phase 3B) | Apache-2.0 | https://github.com/swagger-api/swagger-ui | v5.32.8 | `internal/web/apidocs/static/` (minimal dist subset; see `LICENSE`/`NOTICE`/`VERSION.txt`) |
 
+## Frontend dependencies (Phase 4 SPA · `web/`)
+
+Pinned in `web/package.json`. Built in the Docker `spa` stage (`node:22.12.0-bookworm`); output served from `/usr/share/latenttone/app` at `/app/`. Not Go-vendored.
+
+| Name | Purpose | License | GitHub repository | Tagged release | Notes |
+|------|---------|---------|-------------------|----------------|-------|
+| react | Product SPA UI | MIT | https://github.com/facebook/react | v18.3.1 | `web/` |
+| react-dom | DOM renderer | MIT | https://github.com/facebook/react | v18.3.1 | `web/` |
+| react-router-dom | Client routes + shell outlet | MIT | https://github.com/remix-run/react-router | v6.28.0 | basename `/app` |
+| hls.js | MSE HLS playback | Apache-2.0 | https://github.com/video-dev/hls.js | v1.5.20 | cookie-aware XHR |
+| vite | SPA bundler | MIT | https://github.com/vitejs/vite | v5.4.11 | build-time |
+| @vitejs/plugin-react | React plugin for Vite | MIT | https://github.com/vitejs/vite-plugin-react | v4.3.3 | build-time |
+| typescript | Typecheck | Apache-2.0 | https://github.com/microsoft/TypeScript | v5.6.3 | build-time |
+| @types/react | React typings | MIT | https://github.com/DefinitelyTyped/DefinitelyTyped | v18.3.12 | build-time |
+| @types/react-dom | react-dom typings | MIT | https://github.com/DefinitelyTyped/DefinitelyTyped | v18.3.1 | build-time |
+
+Fonts loaded at runtime from Google Fonts (Instrument Serif, Sora) for the product UI — CDN link in `web/index.html`, not vendored.
+
 ## Notable transitive dependencies
 
 | Name | Via | Notes |

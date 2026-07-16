@@ -73,9 +73,21 @@ func NeighborsWithStore(ctx context.Context, catalog *db.DB, store *lance.Store,
 	if seed == nil || seed.Status != db.VecReady || len(seed.Embedding) == 0 {
 		return nil, fmt.Errorf("track %d has no ready embedding", trackID)
 	}
+	return NeighborsByVector(ctx, catalog, store, seed.Embedding, trackID, k)
+}
+
+// NeighborsByVector returns top-k cosine neighbors for an arbitrary query vector.
+// Used for Radio query jittering (V_query = V_seed + α·ε) without mutating LanceDB.
+func NeighborsByVector(ctx context.Context, catalog *db.DB, store *lance.Store, query []float32, excludeTrackID int64, k int) ([]Neighbor, error) {
+	if k <= 0 {
+		k = 10
+	}
+	if len(query) == 0 {
+		return nil, fmt.Errorf("empty query vector")
+	}
 
 	if store != nil && store.Enabled() {
-		hits, err := store.Search(ctx, seed.Embedding, k, trackID)
+		hits, err := store.Search(ctx, query, k, excludeTrackID)
 		if err == nil && len(hits) > 0 {
 			out := make([]Neighbor, 0, len(hits))
 			for _, h := range hits {
@@ -92,13 +104,13 @@ func NeighborsWithStore(ctx context.Context, catalog *db.DB, store *lance.Store,
 	}
 	var out []Neighbor
 	for _, e := range all {
-		if e.TrackID == trackID {
+		if e.TrackID == excludeTrackID {
 			continue
 		}
-		if len(e.Vector) != len(seed.Embedding) {
+		if len(e.Vector) != len(query) {
 			continue
 		}
-		out = append(out, Neighbor{TrackID: e.TrackID, Score: Cosine(seed.Embedding, e.Vector)})
+		out = append(out, Neighbor{TrackID: e.TrackID, Score: Cosine(query, e.Vector)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
 	if len(out) > k {

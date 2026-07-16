@@ -2,7 +2,7 @@
 
 LatentTone is an open-source, self-hosted music server designed for automated audio discovery and continuous playback. The project shifts the self-hosted media paradigm from manual playlist management to algorithmic, seed-based stream generation.
 
-**Current status — Phase 3 candidate:** library scan → SQLite catalog → browse UI → feature embed / LanceDB → **local auth**, **session worker**, **HLS + progressive stream**, **feedback APIs**. Product SPA is Phase 4.
+**Current status — Phase 4:** product SPA at `/app/` (auth chrome, listen loop, floating player, library browse, playlists) on top of Phase 3 auth/stream/session/feedback and Phase 3C playlists. `/` redirects (302) to `/app/`. Operator catalog HTML lives at `/browse` for scan/embed ops.
 
 ---
 
@@ -14,7 +14,10 @@ LatentTone is an open-source, self-hosted music server designed for automated au
 * Auth API (argon2id): register / login / logout / me — HTTP-only cookie + Bearer opaque token (ADR-005)
 * Listening sessions + short-poll status; feedback (`like` / `dislike` / `skip` / `ban`) steers per-user queue (ADR-007)
 * HLS under `/data/hls/{session_id}` + progressive `GET /api/v1/tracks/{id}/stream` (ADR-006)
-* Optional flag-gated `/dev/stream` probe (Gate C1) — **not** the product client
+* **Product SPA** at `/app/` — login/register, listen + floating player, catalog browse (Artist / Album / Track / Year), playlists, track actions (play next / thumbs / radio / playlist-from-track)
+* Catalog JSON under `/api/v1/catalog/*` for the SPA (Phase 1–2 data; scanner still owned by operator tools)
+* Queue inject `POST /api/v1/sessions/{id}/queue` (V5b play next)
+* Optional flag-gated `/dev/stream` probe (Gate C1) — **debug only**, off by default; use the SPA for listening
 * Optional flag-gated `/api/docs` Swagger UI (Phase 3B) — contract browser / Try-it; **not** a stream-smoke substitute
 * Default embed samples a **random subset** (`max_tracks: 16` with Essentia); full-library embed is opt-in (`sample_mode: all`) and can take a long time
 
@@ -22,11 +25,22 @@ LatentTone is an open-source, self-hosted music server designed for automated au
 
 ```bash
 cp .env.example .env
-# MUSIC_LIBRARY=/mnt2/media/music  (mounted :ro — required)
+# MUSIC_LIBRARY=/path/to/library  (mounted :ro — required)
 docker compose up --build -d browse
 ```
 
-Open <http://localhost:8080>
+**Product client:** <http://localhost:8080/> (redirects to `/app/`)  
+Operator catalog inspector: <http://localhost:8080/browse>
+
+### Reverse proxy / public URL
+
+When LatentTone sits behind HTTPS (recommended for Android Wake Lock and lock-screen artwork), set the canonical origin in `.env`:
+
+```bash
+PUBLIC_BASE_URL=https://latent.lt.lkeng.org/
+```
+
+Compose passes this into the `browse` container. The Go server also accepts `LATENTTONE_PUBLIC_URL` or `public_base_url` in `configs/scanner.yaml`. Clients read it from `GET /api/v1/config` (no auth). Use this for MediaSession cover URLs and any absolute links — do not leave production pointed at `localhost`.
 
 ```bash
 # One-shot catalog scan
@@ -131,9 +145,20 @@ curl -sS -X POST http://localhost:8080/api/v1/me/playlists/from-neighbor \
   -d '{"playlist_id":1,"name":"Saved neighbors"}'
 ```
 
+### Operator install notes
+
+| Mount / path | Role |
+|--------------|------|
+| `${MUSIC_LIBRARY}:/music:ro` | Library (read-only) |
+| `${DATA_DIR:-./data}:/data` | SQLite, LanceDB, HLS under `/data/hls` |
+| `configs/scanner.yaml` | Auth, `spa_root`, probe flags, `public_base_url` |
+| Port `8080` | SPA `/app/`, APIs `/api/v1/*`, operator UI `/` |
+
+See **Reverse proxy / public URL** above for `PUBLIC_BASE_URL` / TLS. Multi-arch: [`docs/MULTIARCH.md`](docs/MULTIARCH.md). Player / Android notes: [`docs/PLAYER.md`](docs/PLAYER.md).
+
 ### Gate C1 stream probe (`/dev/stream`)
 
-Flag-gated verification UI (not the product client). Off by default in `configs/scanner.yaml`.
+Flag-gated verification UI (not the product client). **Off by default** in product `configs/scanner.yaml` — prefer `/app/` for listen/feedback.
 
 **Enable via Compose (recommended for smoke):**
 
@@ -207,6 +232,11 @@ GNU GPL v3 — see [`LICENSE`](LICENSE).
 
 ---
 
-## Coming later
+## SPA development (optional)
 
-Phase 4: product SPA consuming auth + stream + session + feedback APIs; Web Audio transitions; multi-arch release images.
+```bash
+cd web && npm install && npm run dev
+# Vite proxies /api and /covers to :8080 — run `latenttone serve` or Compose browse alongside
+```
+
+Production assets are built in the Docker `spa` stage and served from `spa_root` (`/usr/share/latenttone/app`).

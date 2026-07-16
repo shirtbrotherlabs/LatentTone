@@ -3,6 +3,14 @@
 # Essentia music extractor (AGPL) — pinned digest for Ubuntu 20.04 / music 2.0 / Essentia v2.1_beta5
 FROM ghcr.io/mtg/essentia@sha256:a8131b97632ffeabceba22249f4767bbeddba9b40172199b5ce42242b4649536 AS essentia
 
+# Phase 4 product SPA (Vite + React)
+FROM node:22.12.0-bookworm AS spa
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
+
 FROM golang:1.22-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum* ./
@@ -36,6 +44,7 @@ ENV MUSICNN_MODEL=/models/musicnn/msd-musicnn-1.onnx
 ENV MUSICNN_META=/models/musicnn/msd-musicnn-1.json
 
 COPY --from=build /out/latenttone /usr/local/bin/latenttone
+COPY --from=spa /web/dist /usr/share/latenttone/app
 COPY configs/scanner.yaml /config/scanner.yaml
 COPY configs/metadata.yaml /config/metadata.yaml
 COPY configs/metadata-ml.yaml /config/metadata-ml.yaml

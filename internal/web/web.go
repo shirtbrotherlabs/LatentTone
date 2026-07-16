@@ -93,11 +93,20 @@ func New(cfg *config.Config, metaCfg *meta.Config, catalog *db.DB, scanner *scan
 	}
 	worker := session.NewWorker(catalog, lanceStore, cfg.MaxSessions, cfg.QueuePrefetch)
 	worker.OnAdvance = func(sessionID string, trackID int64) {
-		t, err := catalog.GetTrack(trackID)
-		if err != nil || t == nil {
-			return
-		}
-		_ = hls.EnsureHLS(sessionID, t.Path)
+		// Never block session feedback / skip on FFmpeg HLS packaging.
+		go func() {
+			t, err := catalog.GetTrack(trackID)
+			if err != nil || t == nil {
+				return
+			}
+			enc := stream.EncodeOpts{}
+			if row, err := catalog.GetListeningSession(sessionID); err == nil && row != nil {
+				if prefs, err := catalog.GetStreamPrefs(row.UserID); err == nil {
+					enc = stream.EncodeOpts{Format: prefs.StreamFormat, BitrateKbps: prefs.BitrateKbps}
+				}
+			}
+			_ = hls.EnsureHLS(sessionID, t.Path, enc)
+		}()
 	}
 	authMgr := auth.NewManager(catalog, cfg.AuthMode, cfg.SessionTTL, cfg.SecureCookie)
 	s := &Server{
@@ -133,7 +142,8 @@ func New(cfg *config.Config, metaCfg *meta.Config, catalog *db.DB, scanner *scan
 // Handler returns the HTTP handler.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.handleHome)
+	mux.HandleFunc("/", s.handleRoot)
+	mux.HandleFunc("/browse", s.handleHome)
 	mux.HandleFunc("/artists", s.handleArtists)
 	mux.HandleFunc("/artists/", s.handleArtist)
 	mux.HandleFunc("/albums/", s.handleAlbum)
@@ -146,11 +156,19 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/embed/start", s.handleEmbedStart)
 	mux.HandleFunc("/embed/stop", s.handleEmbedStop)
 	mux.HandleFunc("/embed/status", s.handleEmbedStatus)
+	mux.HandleFunc("/api/scan/status", s.handleAPIScanStatus)
+	mux.HandleFunc("/api/scan/start", s.handleAPIScanStart)
+	mux.HandleFunc("/api/embed/start", s.handleAPIEmbedStart)
+	mux.HandleFunc("/api/embed/stop", s.handleAPIEmbedStop)
 	mux.HandleFunc("/api/embed/status", s.handleEmbedStatus)
 	mux.HandleFunc("/api/v1/playlists", s.handleAPIPlaylists)
 	mux.HandleFunc("/api/v1/playlists/", s.handleAPIPlaylist)
 	mux.HandleFunc("/api/v1/me/playlists", s.handleMePlaylists)
 	mux.HandleFunc("/api/v1/me/playlists/", s.handleMePlaylists)
+	mux.HandleFunc("/api/v1/me/radio-prefs", s.handleMeRadioPrefs)
+	mux.HandleFunc("/api/v1/me/stream-prefs", s.handleMeStreamPrefs)
+	mux.HandleFunc("/api/v1/me/stations", s.handleMeStations)
+	mux.HandleFunc("/api/v1/config", s.handlePublicConfig)
 
 	mux.HandleFunc("/api/v1/auth/register", s.handleAuthRegister)
 	mux.HandleFunc("/api/v1/auth/login", s.handleAuthLogin)
@@ -159,6 +177,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/sessions", s.handleSessions)
 	mux.HandleFunc("/api/v1/sessions/", s.handleSessions)
 	mux.HandleFunc("/api/v1/tracks/", s.handleAPITracks)
+	mux.HandleFunc("/api/v1/catalog", s.handleCatalogAPI)
+	mux.HandleFunc("/api/v1/catalog/", s.handleCatalogAPI)
+
+	s.mountSPA(mux)
 
 	if s.Cfg.EnableStreamProbe {
 		mux.HandleFunc("/dev/stream", s.handleDevStream)
@@ -169,6 +191,35 @@ func (s *Server) Handler() http.Handler {
 	return s.Auth.Middleware(mux)
 }
 
+// mountSPA serves the Phase 4 product client under /app/ when spa_root exists.
+func (s *Server) mountSPA(mux *http.ServeMux) {
+	root := ""
+	if s.Cfg != nil {
+		root = s.Cfg.SPARoot
+	}
+	if root == "" {
+		return
+	}
+	st, err := os.Stat(root)
+	if err != nil || !st.IsDir() {
+		return
+	}
+	fileServer := http.FileServer(http.Dir(root))
+	mux.HandleFunc("/app", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/app/", http.StatusFound)
+	})
+	mux.HandleFunc("/app/", func(w http.ResponseWriter, r *http.Request) {
+		rel := strings.TrimPrefix(r.URL.Path, "/app/")
+		if rel != "" && !strings.Contains(rel, "..") {
+			if fi, err := os.Stat(filepath.Join(root, rel)); err == nil && !fi.IsDir() {
+				http.StripPrefix("/app/", fileServer).ServeHTTP(w, r)
+				return
+			}
+		}
+		http.ServeFile(w, r, filepath.Join(root, "index.html"))
+	})
+}
+
 func (s *Server) handleAPITracks(w http.ResponseWriter, r *http.Request) {
 	if strings.HasSuffix(r.URL.Path, "/stream") || strings.Contains(r.URL.Path, "/stream") {
 		s.handleTrackStream(w, r)
@@ -177,8 +228,18 @@ func (s *Server) handleAPITracks(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
-func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
+// handleRoot redirects the site root to the product SPA (302 Found).
+// Unmatched paths still land here via the "/" catch-all and receive 404.
+func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	http.Redirect(w, r, "/app/", http.StatusFound)
+}
+
+func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/browse" {
 		http.NotFound(w, r)
 		return
 	}
@@ -498,6 +559,9 @@ func playlistHeaderJSON(pl *db.Playlist) map[string]any {
 	} else {
 		out["user_id"] = nil
 	}
+	if pl.CoverPath.Valid && pl.CoverPath.String != "" {
+		out["cover_url"] = "/covers/" + pl.CoverPath.String
+	}
 	return out
 }
 
@@ -695,33 +759,11 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
-	s.scanMu.Lock()
-	if s.scanning {
-		s.scanMu.Unlock()
-		http.Error(w, "scan already running", http.StatusConflict)
+	if err := s.startScanJob(); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	s.scanning = true
-	s.scanMu.Unlock()
-
-	go func() {
-		defer func() {
-			s.scanMu.Lock()
-			s.scanning = false
-			s.scanMu.Unlock()
-		}()
-		res, err := s.Scanner.Full("api")
-		s.scanMu.Lock()
-		if err != nil {
-			s.lastScan = fmt.Sprintf("error: %v", err)
-		} else {
-			s.lastScan = fmt.Sprintf("%s seen=%d upserted=%d missing=%d",
-				time.Now().UTC().Format(time.RFC3339), res.Seen, res.Upserted, res.Missing)
-		}
-		s.scanMu.Unlock()
-	}()
-
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, "/browse", http.StatusSeeOther)
 }
 
 func (s *Server) handleEmbedStart(w http.ResponseWriter, r *http.Request) {
@@ -741,7 +783,7 @@ func (s *Server) handleEmbedStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, "/browse", http.StatusSeeOther)
 }
 
 func (s *Server) handleEmbedStop(w http.ResponseWriter, r *http.Request) {
@@ -754,7 +796,7 @@ func (s *Server) handleEmbedStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.Embed.Stop()
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, "/browse", http.StatusSeeOther)
 }
 
 func (s *Server) handleEmbedStatus(w http.ResponseWriter, r *http.Request) {

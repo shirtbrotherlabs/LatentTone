@@ -61,10 +61,11 @@
   <header>
     <strong>LatentTone</strong>
     <nav>
-      <a href="/">Home</a>
+      <a href="/browse">Home</a>
       <a href="/artists">Artists</a>
       <a href="/tracks">Tracks</a>
       <a href="/lance">LanceDB</a>
+      <a href="/app/">Product SPA</a>
       {{if .EnableStreamProbe}}<a href="/dev/stream">Stream probe</a>{{end}}
       {{if .EnableAPIDocs}}<a href="/api/docs/">API docs</a>{{end}}
     </nav>
@@ -74,9 +75,9 @@
 
 {{define "footer"}}
     {{if .EnableStreamProbe}}
-    <p class="note">Catalog inspector — Phase 3 <a href="/dev/stream">/dev/stream</a> probe is enabled (verification only; not the product client).</p>
+    <p class="note">Catalog inspector — Phase 3 <a href="/dev/stream">/dev/stream</a> probe is enabled (debug only). Product listen UI: <a href="/app/">/app/</a>.</p>
     {{else}}
-    <p class="note">Catalog inspector — browse metadata and features only; no playback.</p>
+    <p class="note">Catalog inspector — browse metadata and features only. Product client: <a href="/app/">/app/</a>.</p>
     {{end}}
   </main>
 </body>

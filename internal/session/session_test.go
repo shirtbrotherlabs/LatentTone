@@ -83,6 +83,71 @@ func TestSkipAdvancesAndIsolation(t *testing.T) {
 	}
 }
 
+func TestCompleteAdvancesWithoutSkip(t *testing.T) {
+	catalog, userID, _, id1, id2, id3 := seedDB(t)
+	defer catalog.Close()
+
+	w := session.NewWorker(catalog, nil, 4, 2)
+	w.Neighbors = func(ctx context.Context, seedTrackID int64, k int) ([]affinity.Neighbor, error) {
+		return []affinity.Neighbor{
+			{TrackID: id2, Score: 0.9},
+			{TrackID: id3, Score: 0.8},
+		}, nil
+	}
+
+	ctx := context.Background()
+	live, err := w.Create(ctx, userID, id1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := live.NowPlayingID
+	if err := w.ApplyFeedback(ctx, live, db.SignalComplete, before); err != nil {
+		t.Fatal(err)
+	}
+	if live.NowPlayingID == before {
+		t.Fatal("expected advance on complete")
+	}
+	// Natural complete must not put the finished track on the session skip list.
+	skips, err := catalog.ListSkippedTrackIDs(userID, live.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := skips[before]; ok {
+		t.Fatal("complete should not session-skip the finished track")
+	}
+}
+
+func TestInjectQueuePinsNext(t *testing.T) {
+	catalog, userID, _, id1, id2, id3 := seedDB(t)
+	defer catalog.Close()
+
+	w := session.NewWorker(catalog, nil, 4, 2)
+	w.Neighbors = func(ctx context.Context, seedTrackID int64, k int) ([]affinity.Neighbor, error) {
+		return []affinity.Neighbor{
+			{TrackID: id2, Score: 0.9},
+		}, nil
+	}
+
+	ctx := context.Background()
+	live, err := w.Create(ctx, userID, id1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.InjectQueue(ctx, live, id3, "next"); err != nil {
+		t.Fatal(err)
+	}
+	status := w.ToStatus(live)
+	if len(status.Queue) == 0 || status.Queue[0].TrackID != id3 {
+		t.Fatalf("want id3 at front of queue, got %#v", status.Queue)
+	}
+	if status.Queue[0].Source != "user_pin" {
+		t.Fatalf("want user_pin source, got %q", status.Queue[0].Source)
+	}
+	if err := w.InjectQueue(ctx, live, id3, "next"); !session.IsQueueConflict(err) {
+		t.Fatalf("want conflict, got %v", err)
+	}
+}
+
 func TestUserStateOwnershipHelpers(t *testing.T) {
 	catalog, userID, _, id1, _, _ := seedDB(t)
 	defer catalog.Close()

@@ -1,0 +1,11 @@
+{
+  "name": "LatentTone",
+  "short_name": "LatentTone",
+  "description": "Self-hosted seed-based music radio",
+  "start_url": "/app/",
+  "scope": "/app/",
+  "display": "standalone",
+  "background_color": "#0f1318",
+  "theme_color": "#0f1318",
+  "icons": []
+}

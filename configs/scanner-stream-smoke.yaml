@@ -38,5 +38,5 @@ enable_api_docs: true
 hls_root: /data/hls
 hls_ttl: 1h
 max_concurrent_sessions: 4
-queue_prefetch: 2
+queue_prefetch: 12
 ffmpeg_path: ffmpeg

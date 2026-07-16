@@ -40,14 +40,20 @@ scan_interval: 1h
 # HTTP listen address for browse UI
 listen_addr: ":8080"
 
+# Canonical public origin for reverse-proxy deployments (MediaSession artwork,
+# absolute links). Overridden by PUBLIC_BASE_URL / LATENTTONE_PUBLIC_URL.
+# No trailing slash required; empty defaults to https://latent.lt.lkeng.org
+public_base_url: https://latent.lt.lkeng.org
+
 # Phase 3 — auth & streaming (ADR-005 / ADR-006)
 auth_mode: authenticated          # authenticated | open (solo-dev escape hatch)
 session_ttl: 168h
 secure_cookie: false
-enable_stream_probe: false        # Gate C1: /dev/stream
+enable_stream_probe: false        # Gate C1: /dev/stream (debug only; product SPA is /app/)
 enable_api_docs: false            # Phase 3B: /api/docs Swagger UI
 hls_root: /data/hls
 hls_ttl: 2h
 max_concurrent_sessions: 8
-queue_prefetch: 2
+queue_prefetch: 12
 ffmpeg_path: ffmpeg
+spa_root: /usr/share/latenttone/app   # Phase 4 product SPA (empty/missing = SPA disabled)

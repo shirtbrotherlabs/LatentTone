@@ -58,6 +58,14 @@ func TestOpenAPIYAMLSkeleton(t *testing.T) {
 		"/api/v1/me/playlists/{id}/tracks/order",
 		"/api/v1/me/playlists/{id}/tracks/{track_id}",
 		"/api/v1/me/playlists/from-neighbor",
+		"/api/v1/me/radio-prefs",
+		"/api/v1/me/stream-prefs",
+		"/api/v1/me/stations",
+		"/api/v1/config",
+		"/api/scan/status",
+		"/api/scan/start",
+		"/api/embed/start",
+		"/api/embed/stop",
 		"/api/embed/status",
 	}
 	for _, p := range required {

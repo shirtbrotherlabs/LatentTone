@@ -7,11 +7,16 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+// DefaultPublicBaseURL is the canonical reverse-proxied origin when unset.
+const DefaultPublicBaseURL = "https://latent.lt.lkeng.org"
 
 // Config is the scanner / browse / Phase 3 service configuration (scanner.yaml).
 type Config struct {
@@ -25,6 +30,10 @@ type Config struct {
 	ScanInterval time.Duration `yaml:"scan_interval"`
 	ListenAddr   string        `yaml:"listen_addr"`
 
+	// PublicBaseURL is the self-referenced / reverse-proxied canonical origin
+	// (no trailing slash). Overridden by PUBLIC_BASE_URL or LATENTTONE_PUBLIC_URL.
+	PublicBaseURL string `yaml:"public_base_url"`
+
 	// Phase 3
 	AuthMode          string        `yaml:"auth_mode"` // authenticated | open
 	SessionTTL        time.Duration `yaml:"session_ttl"`
@@ -36,6 +45,7 @@ type Config struct {
 	MaxSessions       int           `yaml:"max_concurrent_sessions"`
 	QueuePrefetch     int           `yaml:"queue_prefetch"`
 	FFmpegPath        string        `yaml:"ffmpeg_path"`
+	SPARoot           string        `yaml:"spa_root"` // Phase 4 product SPA static root
 }
 
 // Load reads and validates scanner configuration from path.
@@ -49,6 +59,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 	c.applyDefaults()
+	c.applyEnv()
 	if err := c.validate(); err != nil {
 		return nil, err
 	}
@@ -90,11 +101,68 @@ func (c *Config) applyDefaults() {
 		c.MaxSessions = 8
 	}
 	if c.QueuePrefetch <= 0 {
-		c.QueuePrefetch = 2
+		c.QueuePrefetch = 12
 	}
 	if c.FFmpegPath == "" {
 		c.FFmpegPath = "ffmpeg"
 	}
+	if c.SPARoot == "" {
+		c.SPARoot = "/usr/share/latenttone/app"
+	}
+	c.PublicBaseURL = NormalizePublicBaseURL(c.PublicBaseURL)
+}
+
+// applyEnv overlays PUBLIC_BASE_URL / LATENTTONE_PUBLIC_URL (compose-friendly).
+func (c *Config) applyEnv() {
+	if v := strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL")); v != "" {
+		c.PublicBaseURL = NormalizePublicBaseURL(v)
+		return
+	}
+	if v := strings.TrimSpace(os.Getenv("LATENTTONE_PUBLIC_URL")); v != "" {
+		c.PublicBaseURL = NormalizePublicBaseURL(v)
+	}
+}
+
+// NormalizePublicBaseURL trims whitespace/trailing slash; empty → DefaultPublicBaseURL.
+func NormalizePublicBaseURL(raw string) string {
+	s := strings.TrimSpace(raw)
+	s = strings.TrimRight(s, "/")
+	if s == "" {
+		return DefaultPublicBaseURL
+	}
+	return s
+}
+
+// AbsoluteURL joins pathOrURL onto PublicBaseURL when relative.
+func (c *Config) AbsoluteURL(pathOrURL string) string {
+	base := DefaultPublicBaseURL
+	if c != nil && c.PublicBaseURL != "" {
+		base = c.PublicBaseURL
+	}
+	p := strings.TrimSpace(pathOrURL)
+	if p == "" {
+		return base
+	}
+	if strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://") {
+		return p
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return base + p
+}
+
+// PublicOrigin parses PublicBaseURL for host checks (nil if invalid).
+func (c *Config) PublicOrigin() *url.URL {
+	base := DefaultPublicBaseURL
+	if c != nil && c.PublicBaseURL != "" {
+		base = c.PublicBaseURL
+	}
+	u, err := url.Parse(base)
+	if err != nil {
+		return nil
+	}
+	return u
 }
 
 func (c *Config) validate() error {

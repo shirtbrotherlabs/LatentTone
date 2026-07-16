@@ -51,7 +51,8 @@ func (m *Manager) SessionDir(sessionID string) string {
 }
 
 // EnsureHLS starts (or refreshes) HLS packaging for absPath into the session dir.
-func (m *Manager) EnsureHLS(sessionID, relTrackPath string) error {
+// Optional EncodeOpts control audio codec/bitrate (defaults: AAC 192k).
+func (m *Manager) EnsureHLS(sessionID, relTrackPath string, opts ...EncodeOpts) error {
 	abs := filepath.Join(m.LibraryRoot, filepath.FromSlash(relTrackPath))
 	if err := assertUnderRoot(m.LibraryRoot, abs); err != nil {
 		return err
@@ -62,6 +63,11 @@ func (m *Manager) EnsureHLS(sessionID, relTrackPath string) error {
 	dir := m.SessionDir(sessionID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
+	}
+
+	var enc EncodeOpts
+	if len(opts) > 0 {
+		enc = opts[0]
 	}
 
 	m.mu.Lock()
@@ -79,17 +85,20 @@ func (m *Manager) EnsureHLS(sessionID, relTrackPath string) error {
 
 	playlist := filepath.Join(dir, "index.m3u8")
 	segPattern := filepath.Join(dir, "seg%03d.ts")
-	cmd := exec.Command(m.FFmpegPath,
+	args := []string{
 		"-hide_banner", "-loglevel", "error",
 		"-y",
 		"-i", abs,
-		"-c:a", "aac", "-b:a", "192k",
+	}
+	args = append(args, HLSAudioArgs(enc)...)
+	args = append(args,
 		"-f", "hls",
 		"-hls_time", "4",
 		"-hls_list_size", "0",
 		"-hls_segment_filename", segPattern,
 		playlist,
 	)
+	cmd := exec.Command(m.FFmpegPath, args...)
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	if err := cmd.Start(); err != nil {
@@ -111,15 +120,15 @@ func (m *Manager) EnsureHLS(sessionID, relTrackPath string) error {
 		}
 	}()
 
-	// Wait briefly for playlist to appear (best-effort).
-	deadline := time.Now().Add(8 * time.Second)
+	// Do not block callers on FFmpeg spin-up. Progressive playback covers the gap;
+	// serveHLS waits briefly when a client actually requests the playlist.
+	deadline := time.Now().Add(250 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		if st, err := os.Stat(playlist); err == nil && st.Size() > 0 {
 			return nil
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(25 * time.Millisecond)
 	}
-	// Still running — progressive fallback can cover smoke; playlist may arrive later.
 	return nil
 }
 

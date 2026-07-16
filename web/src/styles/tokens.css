@@ -1,0 +1,45 @@
+/*
+ * Copyright (C) 2026 martinsah
+ * SPDX-License-Identifier: GPL-3.0-only
+ * Author: martinsah
+ * Date: 2026-07-15
+ *
+ * Dark-first design tokens for the LatentTone product SPA.
+ */
+
+:root {
+  color-scheme: dark;
+
+  --bg-0: #0c0e12;
+  --bg-1: #12161d;
+  --bg-2: #1a2029;
+  --bg-elevated: rgba(26, 32, 41, 0.92);
+  --ink: #e8e4dc;
+  --ink-muted: #9a9488;
+  --ink-faint: #6a655c;
+  --accent: #d4a574;
+  --accent-strong: #e8b87a;
+  --accent-dim: rgba(212, 165, 116, 0.16);
+  --line: rgba(232, 228, 220, 0.08);
+  --danger: #d47878;
+  --ok: #7db89a;
+  --pin: #8eb4d4;
+
+  --font-display: "Instrument Serif", Georgia, serif;
+  --font-body: "Sora", "Segoe UI", sans-serif;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+
+  --radius: 10px;
+  --player-h: 5.5rem;
+  --nav-w: 14rem;
+  --shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+}

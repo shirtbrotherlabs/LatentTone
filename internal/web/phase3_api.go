@@ -7,6 +7,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/shirtbrotherlabs/LatentTone/internal/auth"
 	"github.com/shirtbrotherlabs/LatentTone/internal/db"
+	"github.com/shirtbrotherlabs/LatentTone/internal/session"
 	"github.com/shirtbrotherlabs/LatentTone/internal/stream"
 )
 
@@ -141,6 +143,20 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if parts[1] == "queue" && r.Method == http.MethodPost {
+		auth.RequireUser(func(w http.ResponseWriter, r *http.Request) {
+			s.postQueueInject(w, r, sessionID)
+		})(w, r)
+		return
+	}
+
+	if parts[1] == "back" && r.Method == http.MethodPost {
+		auth.RequireUser(func(w http.ResponseWriter, r *http.Request) {
+			s.postSessionBack(w, r, sessionID)
+		})(w, r)
+		return
+	}
+
 	if parts[1] == "hls" {
 		auth.RequireUser(func(w http.ResponseWriter, r *http.Request) {
 			s.serveHLS(w, r, sessionID, parts[2:])
@@ -243,6 +259,69 @@ func (s *Server) postFeedback(w http.ResponseWriter, r *http.Request, sessionID 
 	writeJSON(w, http.StatusOK, s.Sessions.ToStatus(live))
 }
 
+func (s *Server) postSessionBack(w http.ResponseWriter, r *http.Request, sessionID string) {
+	u := auth.UserFrom(r.Context())
+	live, err := s.Sessions.Get(sessionID, u.ID)
+	if err != nil {
+		if err.Error() == "forbidden" {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if live == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	err = s.Sessions.Back(r.Context(), live)
+	if err != nil {
+		if errors.Is(err, session.ErrNoHistory) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "no history"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.Sessions.ToStatus(live))
+}
+
+type queueInjectBody struct {
+	TrackID  int64  `json:"track_id"`
+	Position string `json:"position"`
+}
+
+func (s *Server) postQueueInject(w http.ResponseWriter, r *http.Request, sessionID string) {
+	u := auth.UserFrom(r.Context())
+	live, err := s.Sessions.Get(sessionID, u.ID)
+	if err != nil {
+		if err.Error() == "forbidden" {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if live == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	var body queueInjectBody
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil || body.TrackID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "track_id required"})
+		return
+	}
+	if err := s.Sessions.InjectQueue(r.Context(), live, body.TrackID, body.Position); err != nil {
+		if session.IsQueueConflict(err) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.Sessions.ToStatus(live))
+}
+
 func (s *Server) serveHLS(w http.ResponseWriter, r *http.Request, sessionID string, rest []string) {
 	u := auth.UserFrom(r.Context())
 	live, err := s.Sessions.Get(sessionID, u.ID)
@@ -272,7 +351,11 @@ func (s *Server) serveHLS(w http.ResponseWriter, r *http.Request, sessionID stri
 		if name == "index.m3u8" {
 			t, _ := s.DB.GetTrack(live.NowPlayingID)
 			if t != nil {
-				_ = s.HLS.EnsureHLS(sessionID, t.Path)
+				enc := stream.EncodeOpts{}
+				if prefs, err := s.DB.GetStreamPrefs(live.UserID); err == nil {
+					enc = stream.EncodeOpts{Format: prefs.StreamFormat, BitrateKbps: prefs.BitrateKbps}
+				}
+				_ = s.HLS.EnsureHLS(sessionID, t.Path, enc)
 			}
 		}
 		deadline := time.Now().Add(5 * time.Second)
@@ -311,17 +394,44 @@ func (s *Server) handleTrackStream(w http.ResponseWriter, r *http.Request) {
 		}
 		t, err := s.DB.GetTrack(id)
 		if err != nil || t == nil || t.MissingAt.Valid {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "track not found"})
 			return
 		}
 		abs, err := stream.ResolveMediaPath(s.Cfg.LibraryRoot, t.Path)
 		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid media path"})
+			return
+		}
+		u := auth.UserFrom(r.Context())
+		prefs := db.DefaultStreamPrefs(0)
+		if u != nil {
+			if p, err := s.DB.GetStreamPrefs(u.ID); err == nil {
+				prefs = p
+			}
+		}
+		catalogFmt := ""
+		if t.Format.Valid {
+			catalogFmt = t.Format.String
+		}
+		enc := stream.EncodeOpts{Format: prefs.StreamFormat, BitrateKbps: prefs.BitrateKbps}
+		if stream.NeedsTranscode(t.Path, catalogFmt, enc) {
+			if s.HLS == nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+					"error": "transcode unavailable (ffmpeg not configured)",
+				})
+				return
+			}
+			if err := s.HLS.ServeProgressiveTranscode(w, abs, enc); err != nil {
+				// Headers may already be sent; best-effort log via JSON only when possible.
+				s.Log.Printf("track %d stream transcode: %v", id, err)
+			}
 			return
 		}
 		f, err := os.Open(abs)
 		if err != nil {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "media missing"})
+			writeJSON(w, http.StatusNotFound, map[string]string{
+				"error": "media file missing on disk",
+			})
 			return
 		}
 		defer f.Close()

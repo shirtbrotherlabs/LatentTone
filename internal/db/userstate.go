@@ -9,13 +9,15 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 const (
-	SignalLike    = "like"
-	SignalDislike = "dislike"
-	SignalSkip    = "skip"
-	SignalBan     = "ban"
+	SignalLike     = "like"
+	SignalDislike  = "dislike"
+	SignalSkip     = "skip"
+	SignalBan      = "ban"
+	SignalComplete = "complete" // natural track end — advance without skip penalty
 
 	SkipScopeLibrary = "library"
 	SkipScopeSession = "session"
@@ -108,6 +110,113 @@ WHERE user_id = ? AND (scope = ? OR (scope = ? AND session_key = ?))`,
 			return nil, err
 		}
 		out[id] = struct{}{}
+	}
+	return out, rows.Err()
+}
+
+// LatestLikeDislikeSignals returns the newest like/dislike signal per track for a user.
+// Tracks with no like/dislike feedback are omitted from the map.
+func (d *DB) LatestLikeDislikeSignals(userID int64, trackIDs []int64) (map[int64]string, error) {
+	out := make(map[int64]string)
+	if len(trackIDs) == 0 {
+		return out, nil
+	}
+	// Deduplicate while preserving order for stable queries.
+	seen := make(map[int64]struct{}, len(trackIDs))
+	ids := make([]int64, 0, len(trackIDs))
+	for _, id := range trackIDs {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, userID)
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+	q := `
+SELECT tf.track_id, tf.signal
+FROM track_feedback tf
+INNER JOIN (
+  SELECT track_id, MAX(created_at) AS max_at
+  FROM track_feedback
+  WHERE user_id = ?
+    AND signal IN ('like', 'dislike')
+    AND track_id IN (` + strings.Join(placeholders, ",") + `)
+  GROUP BY track_id
+) latest ON latest.track_id = tf.track_id AND latest.max_at = tf.created_at
+WHERE tf.user_id = ?
+  AND tf.signal IN ('like', 'dislike')`
+	args = append(args, userID)
+	rows, err := d.SQL.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var signal string
+		if err := rows.Scan(&id, &signal); err != nil {
+			return nil, err
+		}
+		out[id] = signal
+	}
+	return out, rows.Err()
+}
+
+// PlayCountsForTracks returns global playback_events counts keyed by track id.
+func (d *DB) PlayCountsForTracks(trackIDs []int64) (map[int64]int64, error) {
+	out := make(map[int64]int64)
+	if len(trackIDs) == 0 {
+		return out, nil
+	}
+	seen := make(map[int64]struct{}, len(trackIDs))
+	ids := make([]int64, 0, len(trackIDs))
+	for _, id := range trackIDs {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	q := `
+SELECT track_id, COUNT(*)
+FROM playback_events
+WHERE track_id IN (` + strings.Join(placeholders, ",") + `)
+GROUP BY track_id`
+	rows, err := d.SQL.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, n int64
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out[id] = n
 	}
 	return out, rows.Err()
 }
@@ -224,6 +333,45 @@ SELECT COUNT(1) FROM listening_sessions WHERE status IN (?, ?)`,
 		SessionStatusCreated, SessionStatusPlaying,
 	).Scan(&n)
 	return n, err
+}
+
+// ListRecentListeningSessions returns the user's most recently updated stations.
+// Active (created/playing) rows are ordered ahead of stopped/error for the same
+// updated_at bucket; overall sort is updated_at DESC then created_at DESC.
+func (d *DB) ListRecentListeningSessions(userID int64, limit int) ([]ListeningSession, error) {
+	if limit <= 0 {
+		limit = 12
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	rows, err := d.SQL.Query(`
+SELECT id, user_id, seed_track_id, status, now_playing_id, queue_json, last_feedback, error_message, created_at, updated_at
+FROM listening_sessions
+WHERE user_id = ?
+ORDER BY
+  CASE WHEN status IN (?, ?) THEN 0 ELSE 1 END,
+  updated_at DESC,
+  created_at DESC
+LIMIT ?`,
+		userID, SessionStatusCreated, SessionStatusPlaying, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ListeningSession
+	for rows.Next() {
+		var s ListeningSession
+		if err := rows.Scan(
+			&s.ID, &s.UserID, &s.SeedTrackID, &s.Status, &s.NowPlayingID,
+			&s.QueueJSON, &s.LastFeedback, &s.ErrorMessage, &s.CreatedAt, &s.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
 }
 
 // ListTrackIDsNotMissing returns up to limit track ids that are not soft-deleted.

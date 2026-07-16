@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -189,6 +190,34 @@ func runServe(args []string) int {
 		}()
 	}
 
+	// Resume acoustic-identity / embed work when the catalog is incomplete.
+	go func() {
+		if embedCtrl.Running() {
+			return
+		}
+		extractorSet := mcfg.ExtractorSetString()
+		modelJSON, _ := json.Marshal(mcfg.ModelVersions)
+		if _, err := catalog.EnsureVectorRows(extractorSet, string(modelJSON)); err != nil {
+			log.Printf("startup embed ensure rows: %v", err)
+			return
+		}
+		ready, pending, processing, _, stale, catalogTracks, err := catalog.VectorStatusCounts()
+		if err != nil {
+			log.Printf("startup embed status: %v", err)
+			return
+		}
+		incomplete := pending > 0 || processing > 0 || stale > 0 || (catalogTracks > 0 && ready < catalogTracks)
+		if !incomplete {
+			return
+		}
+		if err := embedCtrl.Start(ctx, mcfg, catalog, "startup"); err != nil {
+			// Already running (or stop requested race) — do not loop.
+			log.Printf("startup embed: %v", err)
+			return
+		}
+		log.Printf("startup embed resumed (ready=%d pending=%d catalog=%d)", ready, pending, catalogTracks)
+	}()
+
 	stopWatch := make(chan struct{})
 	go func() {
 		if err := sc.Watch(stopWatch); err != nil {
@@ -245,8 +274,8 @@ func runServe(args []string) int {
 		_ = httpSrv.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("listening on %s auth_mode=%s stream_probe=%v api_docs=%v (catalog browse + Phase 3 APIs)",
-		cfg.ListenAddr, cfg.AuthMode, cfg.EnableStreamProbe, cfg.EnableAPIDocs)
+	log.Printf("listening on %s public_base_url=%s auth_mode=%s stream_probe=%v api_docs=%v (catalog browse + Phase 3 APIs)",
+		cfg.ListenAddr, cfg.PublicBaseURL, cfg.AuthMode, cfg.EnableStreamProbe, cfg.EnableAPIDocs)
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Println(err)
 		return 1

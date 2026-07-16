@@ -366,8 +366,9 @@ WHERE id = ?`,
 
 // Artist is a browse row.
 type Artist struct {
-	ID   int64
-	Name string
+	ID        int64
+	Name      string
+	CoverPath sql.NullString // representative album cover when available
 }
 
 // Album is a browse row.
@@ -398,17 +399,29 @@ type Track struct {
 	MissingAt    sql.NullString
 	AlbumTitle   string
 	ArtistName   string
+	ArtistID     sql.NullInt64
 	CoverPath    sql.NullString
 	Genres       string
 }
 
 // ListArtists returns artists with at least one non-missing track, sorted.
+// CoverPath is a representative album cover (first album with a cover, by year/title).
 func (d *DB) ListArtists() ([]Artist, error) {
 	rows, err := d.SQL.Query(`
-SELECT DISTINCT a.id, a.name
+SELECT a.id, a.name,
+  (SELECT al.cover_path
+   FROM albums al
+   JOIN tracks t ON t.album_id = al.id AND t.missing_at IS NULL
+   WHERE al.artist_id = a.id
+     AND al.cover_path IS NOT NULL AND TRIM(al.cover_path) != ''
+   ORDER BY al.year, al.title COLLATE NOCASE
+   LIMIT 1) AS cover_path
 FROM artists a
-JOIN albums al ON al.artist_id = a.id
-JOIN tracks t ON t.album_id = al.id AND t.missing_at IS NULL
+WHERE EXISTS (
+  SELECT 1 FROM albums al
+  JOIN tracks t ON t.album_id = al.id AND t.missing_at IS NULL
+  WHERE al.artist_id = a.id
+)
 ORDER BY COALESCE(a.name_sort, a.name) COLLATE NOCASE`)
 	if err != nil {
 		return nil, err
@@ -417,7 +430,7 @@ ORDER BY COALESCE(a.name_sort, a.name) COLLATE NOCASE`)
 	var out []Artist
 	for rows.Next() {
 		var a Artist
-		if err := rows.Scan(&a.ID, &a.Name); err != nil {
+		if err := rows.Scan(&a.ID, &a.Name, &a.CoverPath); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -477,7 +490,8 @@ func (d *DB) ListTracksByAlbum(albumID int64) ([]Track, error) {
 SELECT t.id, t.album_id, t.path, t.title, t.track_number, t.disc_number, t.duration_ms,
        t.bitrate_kbps, t.sample_rate_hz, t.channels, t.format, t.year, t.comment, t.missing_at,
        COALESCE(al.title, ''), COALESCE(a.name, ''), al.cover_path,
-       COALESCE((SELECT GROUP_CONCAT(g.name, ', ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id), '')
+       COALESCE((SELECT GROUP_CONCAT(g.name, ', ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id), ''),
+       al.artist_id
 FROM tracks t
 LEFT JOIN albums al ON al.id = t.album_id
 LEFT JOIN artists a ON a.id = al.artist_id
@@ -496,7 +510,8 @@ func (d *DB) GetTrack(id int64) (*Track, error) {
 SELECT t.id, t.album_id, t.path, t.title, t.track_number, t.disc_number, t.duration_ms,
        t.bitrate_kbps, t.sample_rate_hz, t.channels, t.format, t.year, t.comment, t.missing_at,
        COALESCE(al.title, ''), COALESCE(a.name, ''), al.cover_path,
-       COALESCE((SELECT GROUP_CONCAT(g.name, ', ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id), '')
+       COALESCE((SELECT GROUP_CONCAT(g.name, ', ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id), ''),
+       al.artist_id
 FROM tracks t
 LEFT JOIN albums al ON al.id = t.album_id
 LEFT JOIN artists a ON a.id = al.artist_id
@@ -513,25 +528,177 @@ WHERE t.id = ?`, id)
 
 // ListTracks returns recent non-missing tracks (browse index).
 func (d *DB) ListTracks(limit int) ([]Track, error) {
+	return d.ListTracksFiltered(limit, "", 0)
+}
+
+// ListSeedSuggestions returns up to limit random non-missing tracks for Now Playing
+// quick seeds. Prefer tracks with at least one playback_events row (global play count
+// proxy); if that pool is short, fill the rest from unplayed tracks at random.
+func (d *DB) ListSeedSuggestions(limit int) ([]Track, error) {
 	if limit <= 0 {
-		limit = 200
+		limit = 12
 	}
-	rows, err := d.SQL.Query(`
+	if limit > 100 {
+		limit = 100
+	}
+	const trackCols = `
 SELECT t.id, t.album_id, t.path, t.title, t.track_number, t.disc_number, t.duration_ms,
        t.bitrate_kbps, t.sample_rate_hz, t.channels, t.format, t.year, t.comment, t.missing_at,
        COALESCE(al.title, ''), COALESCE(a.name, ''), al.cover_path,
-       COALESCE((SELECT GROUP_CONCAT(g.name, ', ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id), '')
+       COALESCE((SELECT GROUP_CONCAT(g.name, ', ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id), ''),
+       al.artist_id
+FROM tracks t
+LEFT JOIN albums al ON al.id = t.album_id
+LEFT JOIN artists a ON a.id = al.artist_id`
+
+	played, err := d.SQL.Query(trackCols+`
+WHERE t.missing_at IS NULL
+  AND EXISTS (SELECT 1 FROM playback_events pe WHERE pe.track_id = t.id)
+ORDER BY RANDOM()
+LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	out, err := scanTracks(played)
+	_ = played.Close()
+	if err != nil {
+		return nil, err
+	}
+	if len(out) >= limit {
+		return out[:limit], nil
+	}
+
+	need := limit - len(out)
+	exclude := make([]string, 0, len(out))
+	args := make([]any, 0, len(out)+1)
+	for _, t := range out {
+		exclude = append(exclude, "?")
+		args = append(args, t.ID)
+	}
+	args = append(args, need)
+	sqlStr := trackCols + `
+WHERE t.missing_at IS NULL`
+	if len(exclude) > 0 {
+		sqlStr += `
+  AND t.id NOT IN (` + strings.Join(exclude, ",") + `)`
+	}
+	sqlStr += `
+ORDER BY RANDOM()
+LIMIT ?`
+	fill, err := d.SQL.Query(sqlStr, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer fill.Close()
+	extra, err := scanTracks(fill)
+	if err != nil {
+		return nil, err
+	}
+	return append(out, extra...), nil
+}
+
+// ListTracksFiltered lists non-missing tracks with optional title substring and year.
+// year == 0 means any year. q is matched case-insensitively against title/artist/album.
+func (d *DB) ListTracksFiltered(limit int, q string, year int) ([]Track, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+	q = strings.TrimSpace(q)
+	args := []any{}
+	where := []string{"t.missing_at IS NULL"}
+	if year > 0 {
+		where = append(where, "COALESCE(t.year, al.year) = ?")
+		args = append(args, year)
+	}
+	if q != "" {
+		where = append(where, `(t.title LIKE ? COLLATE NOCASE
+			OR COALESCE(a.name, '') LIKE ? COLLATE NOCASE
+			OR COALESCE(al.title, '') LIKE ? COLLATE NOCASE)`)
+		like := "%" + q + "%"
+		args = append(args, like, like, like)
+	}
+	args = append(args, limit)
+	sqlStr := `
+SELECT t.id, t.album_id, t.path, t.title, t.track_number, t.disc_number, t.duration_ms,
+       t.bitrate_kbps, t.sample_rate_hz, t.channels, t.format, t.year, t.comment, t.missing_at,
+       COALESCE(al.title, ''), COALESCE(a.name, ''), al.cover_path,
+       COALESCE((SELECT GROUP_CONCAT(g.name, ', ') FROM track_genres tg JOIN genres g ON g.id = tg.genre_id WHERE tg.track_id = t.id), ''),
+       al.artist_id
 FROM tracks t
 LEFT JOIN albums al ON al.id = t.album_id
 LEFT JOIN artists a ON a.id = al.artist_id
-WHERE t.missing_at IS NULL
+WHERE ` + strings.Join(where, " AND ") + `
 ORDER BY t.title COLLATE NOCASE
-LIMIT ?`, limit)
+LIMIT ?`
+	rows, err := d.SQL.Query(sqlStr, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	return scanTracks(rows)
+}
+
+// ListAlbums returns albums with at least one non-missing track.
+func (d *DB) ListAlbums(limit int) ([]Album, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+	rows, err := d.SQL.Query(`
+SELECT al.id, al.artist_id, al.title, al.year, al.cover_path, COALESCE(a.name, '')
+FROM albums al
+LEFT JOIN artists a ON a.id = al.artist_id
+WHERE EXISTS (SELECT 1 FROM tracks t WHERE t.album_id = al.id AND t.missing_at IS NULL)
+ORDER BY al.title COLLATE NOCASE
+LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanAlbums(rows)
+}
+
+// YearCount is a release-year browse bucket.
+type YearCount struct {
+	Year  int
+	Count int
+}
+
+// ListYears returns distinct release years (track year, falling back to album year) with track counts.
+func (d *DB) ListYears() ([]YearCount, error) {
+	rows, err := d.SQL.Query(`
+SELECT y.year, COUNT(*) AS n
+FROM (
+  SELECT COALESCE(t.year, al.year) AS year
+  FROM tracks t
+  LEFT JOIN albums al ON al.id = t.album_id
+  WHERE t.missing_at IS NULL AND COALESCE(t.year, al.year) IS NOT NULL
+) y
+GROUP BY y.year
+ORDER BY y.year DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []YearCount
+	for rows.Next() {
+		var yc YearCount
+		if err := rows.Scan(&yc.Year, &yc.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, yc)
+	}
+	return out, rows.Err()
+}
+
+// ListTracksByYear lists tracks whose release year matches (track year, else album year).
+func (d *DB) ListTracksByYear(year, limit int) ([]Track, error) {
+	return d.ListTracksFiltered(limit, "", year)
 }
 
 // Counts returns basic catalog counts.
@@ -569,7 +736,7 @@ func scanTrack(row scannable) (Track, error) {
 	err := row.Scan(
 		&t.ID, &t.AlbumID, &t.Path, &t.Title, &t.TrackNumber, &t.DiscNumber, &t.DurationMS,
 		&t.BitrateKbps, &t.SampleRateHz, &t.Channels, &t.Format, &t.Year, &t.Comment, &t.MissingAt,
-		&t.AlbumTitle, &t.ArtistName, &t.CoverPath, &t.Genres,
+		&t.AlbumTitle, &t.ArtistName, &t.CoverPath, &t.Genres, &t.ArtistID,
 	)
 	return t, err
 }

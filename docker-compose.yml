@@ -6,6 +6,8 @@ services:
       - "${BROWSE_PORT:-8080}:8080"
     environment:
       TZ: UTC
+      # Canonical HTTPS origin behind reverse proxy (MediaSession artwork, absolute links).
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://latent.lt.lkeng.org/}
     volumes:
       # Test/dev library — READ ONLY (required)
       - ${MUSIC_LIBRARY:-/mnt2/media/music}:/music:ro
@@ -26,6 +28,7 @@ services:
       - "${BROWSE_PORT:-8080}:8080"
     environment:
       TZ: UTC
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://latent.lt.lkeng.org/}
     volumes:
       - ${MUSIC_LIBRARY:-/mnt2/media/music}:/music:ro
       - ${DATA_DIR:-./data}:/data

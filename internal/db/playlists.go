@@ -36,6 +36,7 @@ type Playlist struct {
 	Length      int
 	CreatedAt   string
 	UpdatedAt   string
+	CoverPath   sql.NullString // optional thumbnail (list queries may populate)
 }
 
 // PlaylistEntry is one position in a playlist.
@@ -146,11 +147,22 @@ func (d *DB) ListUserPlaylists(userID int64, limit int) ([]Playlist, error) {
 	if limit <= 0 {
 		limit = 100
 	}
+	// CoverPath: album art from a track in the playlist (stable pick via
+	// (track_id + playlist_id) ordering so the thumbnail does not flicker).
 	rows, err := d.SQL.Query(`
-SELECT id, name, seed_track_id, user_id, kind, length, created_at, updated_at
-FROM playlists
-WHERE kind = ? AND user_id = ?
-ORDER BY updated_at DESC, id DESC
+SELECT p.id, p.name, p.seed_track_id, p.user_id, p.kind, p.length, p.created_at, p.updated_at,
+  (SELECT al.cover_path
+   FROM playlist_tracks pt
+   JOIN tracks t ON t.id = pt.track_id
+   JOIN albums al ON al.id = t.album_id
+   WHERE pt.playlist_id = p.id
+     AND al.cover_path IS NOT NULL
+     AND al.cover_path != ''
+   ORDER BY ((pt.track_id + pt.playlist_id) % 9973), pt.position
+   LIMIT 1) AS cover_path
+FROM playlists p
+WHERE p.kind = ? AND p.user_id = ?
+ORDER BY p.updated_at DESC, p.id DESC
 LIMIT ?`, PlaylistKindUser, userID, limit)
 	if err != nil {
 		return nil, err
@@ -159,7 +171,7 @@ LIMIT ?`, PlaylistKindUser, userID, limit)
 	var out []Playlist
 	for rows.Next() {
 		var p Playlist
-		if err := rows.Scan(&p.ID, &p.Name, &p.SeedTrackID, &p.UserID, &p.Kind, &p.Length, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.SeedTrackID, &p.UserID, &p.Kind, &p.Length, &p.CreatedAt, &p.UpdatedAt, &p.CoverPath); err != nil {
 			return nil, err
 		}
 		out = append(out, p)

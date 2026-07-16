@@ -3,6 +3,10 @@ data/
 *.db
 *.db-*
 
+# Phase 4 SPA
+web/node_modules/
+web/dist/
+
 # ML weight caches (fetched at image build)
 models/**/*.onnx
 models/**/*.tflite

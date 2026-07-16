@@ -22,6 +22,8 @@ info:
 servers:
   - url: /
     description: Same origin as latenttone serve
+  - url: https://latent.lt.lkeng.org
+    description: Example reverse-proxied public origin (override via PUBLIC_BASE_URL)
 
 tags:
   - name: auth
@@ -36,8 +38,12 @@ tags:
     description: Phase 2 neighbor playlist API (operator; auth optional)
   - name: me-playlists
     description: Phase 3C user-owned playlist CRUD (auth required; ADR-008)
+  - name: radio
+    description: Per-user Radio diversification preferences (ADR-007)
   - name: embed
-    description: Acoustic embed job progress
+    description: Acoustic embed job progress and control
+  - name: scan
+    description: Catalog / metadata library scan progress and control
 
 paths:
   /api/v1/auth/register:
@@ -251,7 +257,8 @@ paths:
       tags: [feedback]
       summary: Apply feedback signal
       description: |
-        Signals: `like`, `dislike`, `skip`, `ban`. Optional `track_id` defaults to
+        Signals: `like`, `dislike`, `skip`, `ban`, `complete` (natural end).
+        Optional `track_id` defaults to
         the session's current now-playing track. Response is the updated session status
         (field names match `stream_smoke.sh`).
       operationId: postFeedback
@@ -283,6 +290,88 @@ paths:
         '403':
           $ref: '#/components/responses/Error'
         '404':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/sessions/{id}/queue:
+    post:
+      tags: [sessions]
+      summary: Inject track into upcoming queue (play next)
+      description: |
+        Phase 3 V5b / ADR-007. Pins `track_id` at `position` `next` (default) or `end`.
+        Duplicates return 409. Response is the updated session status (`queue[].source`
+        is `user_pin` for pinned entries).
+      operationId: postQueueInject
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SessionID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [track_id]
+              properties:
+                track_id:
+                  type: integer
+                  format: int64
+                position:
+                  type: string
+                  enum: [next, end]
+                  default: next
+            example:
+              track_id: 418
+              position: next
+      responses:
+        '200':
+          description: Updated session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionStatus'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/sessions/{id}/back:
+    post:
+      tags: [sessions]
+      summary: Go to previous track in session history
+      description: |
+        Restores the previous played/skipped track and pushes the current track
+        to the front of the queue. Returns 409 when history is empty (client should
+        restart the current track from 0). Does not stop the station.
+      operationId: postSessionBack
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/SessionID'
+      responses:
+        '200':
+          description: Updated session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionStatus'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
           $ref: '#/components/responses/Error'
 
   /api/v1/sessions/{id}/hls/index.m3u8:
@@ -473,6 +562,153 @@ paths:
               schema:
                 $ref: '#/components/schemas/Playlist'
         '404':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/me/radio-prefs:
+    get:
+      tags: [radio]
+      summary: Get Radio listening preferences
+      description: |
+        Returns per-user Radio diversification toggles. Missing rows return product
+        defaults (artist cooldown, query jitter, artist penalty, bounded random, and
+        Radio Bridge all **on**; `jitter_alpha` default `0.05`).
+      operationId: getRadioPrefs
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RadioPrefs'
+        '401':
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [radio]
+      summary: Update Radio listening preferences
+      description: Partial update; omitted fields keep their current (or default) values.
+      operationId: patchRadioPrefs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RadioPrefsPatch'
+            example:
+              radio_bridge: true
+              artist_cooldown: true
+              jitter_alpha: 0.05
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RadioPrefs'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/me/stream-prefs:
+    get:
+      tags: [stream]
+      summary: Get stream encode preferences
+      description: |
+        Per-user progressive/HLS defaults. Missing rows return `stream_format=original`
+        and `bitrate_kbps=192`. `original` serves the file when the container is
+        browser-safe; otherwise the server auto-transcodes to MP3. `mp3` / `aac`
+        always transcode at the configured bitrate.
+      operationId: getStreamPrefs
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StreamPrefs'
+        '401':
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [stream]
+      summary: Update stream encode preferences
+      description: Partial update; omitted fields keep their current (or default) values.
+      operationId: patchStreamPrefs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StreamPrefsPatch'
+            example:
+              stream_format: mp3
+              bitrate_kbps: 192
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StreamPrefs'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/config:
+    get:
+      tags: [auth]
+      summary: Public deployment config
+      description: |
+        Non-secret hints for clients (canonical `public_base_url` for MediaSession
+        artwork and absolute links). No authentication required. Override via
+        `PUBLIC_BASE_URL` / `LATENTTONE_PUBLIC_URL` or `public_base_url` in scanner.yaml.
+      operationId: getPublicConfig
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [public_base_url]
+                properties:
+                  public_base_url:
+                    type: string
+                    example: https://latent.lt.lkeng.org
+
+  /api/v1/me/stations:
+    get:
+      tags: [sessions]
+      summary: List recent radio stations
+      description: |
+        Returns the caller's recent continuous-play listening sessions (stations),
+        newest first, with active (`created` / `playing`) ahead of stopped.
+        Each row includes seed / last now-playing track metadata when available.
+        Persistence is the existing `listening_sessions` table (no extra schema).
+        Resume of a stopped station means starting a new session from that station's
+        last track (or seed); live workers are not resurrected after stop.
+      operationId: listMyStations
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 12
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StationList'
+        '401':
           $ref: '#/components/responses/Error'
 
   /api/v1/me/playlists:
@@ -711,6 +947,84 @@ paths:
         '404':
           $ref: '#/components/responses/Error'
 
+  /api/scan/status:
+    get:
+      tags: [scan]
+      summary: Catalog library scan status
+      description: |
+        Whether a full catalog/metadata scan is running, last result summary,
+        and artist/album/track counts. Catalog scan is not cancellable once
+        started (`stoppable` is always false).
+      operationId: scanStatus
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScanStatus'
+
+  /api/scan/start:
+    post:
+      tags: [scan]
+      summary: Start catalog library scan
+      description: |
+        Starts a full library reconcile (tags → SQLite catalog). Returns 409 if
+        a scan is already running. There is no stop API — the scanner does not
+        support mid-run cancellation.
+      operationId: scanStart
+      security: []
+      responses:
+        '200':
+          description: Scan started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobAck'
+        '409':
+          $ref: '#/components/responses/Error'
+
+  /api/embed/start:
+    post:
+      tags: [embed]
+      summary: Start acoustic identity / embed job
+      description: |
+        JSON twin of operator `POST /embed/start`. Starts configured extractors
+        (Essentia / YAMNet / MusiCNN) against pending catalog tracks.
+      operationId: embedStart
+      security: []
+      responses:
+        '200':
+          description: Embed started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobAck'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+
+  /api/embed/stop:
+    post:
+      tags: [embed]
+      summary: Stop acoustic identity / embed job
+      description: |
+        JSON twin of operator `POST /embed/stop`. Requests cancellation of a
+        running embed controller job.
+      operationId: embedStop
+      security: []
+      responses:
+        '200':
+          description: Stop requested
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobAck'
+        '503':
+          $ref: '#/components/responses/Error'
+
   /api/embed/status:
     get:
       tags: [embed]
@@ -790,6 +1104,92 @@ components:
           type: string
       required: [id, username]
 
+    RadioPrefs:
+      type: object
+      description: |
+        Live Radio post-ANN diversification controls. Defaults: all boolean fields
+        true; `jitter_alpha` = 0.05.
+      properties:
+        user_id:
+          type: integer
+          format: int64
+        radio_bridge:
+          type: boolean
+          description: Every 5–7 plays inject a high-affinity bridge track and re-seed
+        artist_cooldown:
+          type: boolean
+          description: Skip artists from the last ~3 plays when a different artist exists
+        query_jitter:
+          type: boolean
+          description: Add small noise to the query vector before neighbor search
+        artist_penalty:
+          type: boolean
+          description: Temporary +0.5 cosine-distance penalty for a just-played artist
+        bounded_random:
+          type: boolean
+          description: Weighted random pick among top-N diversified candidates
+        jitter_alpha:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 0.5
+          description: Scale of query-vector Gaussian noise when query_jitter is on
+        updated_at:
+          type: string
+          format: date-time
+      required: [user_id, radio_bridge, artist_cooldown, query_jitter, artist_penalty, bounded_random, jitter_alpha]
+
+    RadioPrefsPatch:
+      type: object
+      properties:
+        radio_bridge:
+          type: boolean
+        artist_cooldown:
+          type: boolean
+        query_jitter:
+          type: boolean
+        artist_penalty:
+          type: boolean
+        bounded_random:
+          type: boolean
+        jitter_alpha:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 0.5
+
+    StreamPrefs:
+      type: object
+      description: |
+        Progressive/HLS encode defaults. Default `stream_format=original`,
+        `bitrate_kbps=192`.
+      properties:
+        user_id:
+          type: integer
+          format: int64
+        stream_format:
+          type: string
+          enum: [original, mp3, aac]
+        bitrate_kbps:
+          type: integer
+          minimum: 64
+          maximum: 320
+        updated_at:
+          type: string
+          format: date-time
+      required: [user_id, stream_format, bitrate_kbps]
+
+    StreamPrefsPatch:
+      type: object
+      properties:
+        stream_format:
+          type: string
+          enum: [original, mp3, aac]
+        bitrate_kbps:
+          type: integer
+          minimum: 64
+          maximum: 320
+
     AuthSuccess:
       type: object
       properties:
@@ -809,6 +1209,47 @@ components:
           format: int64
           minimum: 1
 
+    StationList:
+      type: object
+      required: [stations]
+      properties:
+        stations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Station'
+
+    Station:
+      type: object
+      required: [id, status, started_at, updated_at]
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [created, playing, stopped, error]
+        seed_track_id:
+          type: integer
+          format: int64
+        now_playing_id:
+          type: integer
+          format: int64
+        started_at:
+          type: string
+          description: Session created_at
+        updated_at:
+          type: string
+        stopped_at:
+          type: string
+          description: Present when status is stopped or error (updated_at at stop)
+        seed_track:
+          type: object
+          description: Catalog track fields for the seed (id, title, artist, album, cover_url, …)
+          additionalProperties: true
+        now_playing:
+          type: object
+          description: Catalog track fields for last/current now-playing
+          additionalProperties: true
+
     TrackRef:
       type: object
       properties:
@@ -818,13 +1259,25 @@ components:
         score:
           type: number
           format: double
+        source:
+          type: string
+          description: Set to user_pin when manually injected (V5b)
+          enum: [user_pin]
+        feedback:
+          type: string
+          description: Latest like/dislike signal for the session user (when present)
+          enum: [like, dislike]
+        play_count:
+          type: integer
+          format: int64
+          description: Global playback_events count for the track
 
     FeedbackAck:
       type: object
       properties:
         signal:
           type: string
-          enum: [like, dislike, skip, ban]
+          enum: [like, dislike, skip, ban, complete]
         track_id:
           type: integer
           format: int64
@@ -848,6 +1301,11 @@ components:
           format: int64
         now_playing:
           $ref: '#/components/schemas/TrackRef'
+        history:
+          type: array
+          description: Recently played/skipped tracks (oldest → newest), capped (e.g. 8)
+          items:
+            $ref: '#/components/schemas/TrackRef'
         queue:
           type: array
           items:
@@ -860,6 +1318,9 @@ components:
         progressive_url:
           type: string
           example: /api/v1/tracks/{id}/stream
+        can_go_back:
+          type: boolean
+          description: True when session history has at least one previous track
 
     FeedbackRequest:
       type: object
@@ -867,7 +1328,10 @@ components:
       properties:
         signal:
           type: string
-          enum: [like, dislike, skip, ban]
+          enum: [like, dislike, skip, ban, complete]
+          description: |
+            `complete` = natural track end (client `ended`); advances without
+            session-skip / affinity penalty.
         track_id:
           type: integer
           format: int64
@@ -994,6 +1458,35 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/PlaylistTrack'
+
+    JobAck:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        running:
+          type: boolean
+        stoppable:
+          type: boolean
+          description: Present on catalog scan start; always false (no cancel).
+
+    ScanStatus:
+      type: object
+      properties:
+        running:
+          type: boolean
+        last:
+          type: string
+        artists:
+          type: integer
+        albums:
+          type: integer
+        tracks:
+          type: integer
+        stoppable:
+          type: boolean
+          description: Always false — catalog scan has no cancel API.
+      required: [running, artists, albums, tracks, stoppable]
 
     EmbedStatus:
       type: object
