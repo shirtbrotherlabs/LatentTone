@@ -7,6 +7,25 @@ package stream
 
 import "testing"
 
+func TestIsTranscodeRangeProbe(t *testing.T) {
+	cases := []struct {
+		h    string
+		want bool
+	}{
+		{"", false},
+		{"bytes=0-", false},
+		{"bytes=0-2047", true},
+		{"bytes=100-200", true},
+		{"bytes=500-", false},
+		{"bytes=0-1, bytes=2-3", true},
+	}
+	for _, tc := range cases {
+		if got := IsTranscodeRangeProbe(tc.h); got != tc.want {
+			t.Fatalf("IsTranscodeRangeProbe(%q)=%v want %v", tc.h, got, tc.want)
+		}
+	}
+}
+
 func TestNeedsTranscodeOpus(t *testing.T) {
 	if !NeedsTranscode("a.flac", "flac", EncodeOpts{Format: "opus", BitrateKbps: 160}) {
 		t.Fatal("opus pref should always transcode")
@@ -25,8 +44,17 @@ func TestResolveEncodeTargetOpus(t *testing.T) {
 
 func TestHLSAudioArgsOpusUsesAAC(t *testing.T) {
 	args := HLSAudioArgs(EncodeOpts{Format: "opus", BitrateKbps: 192})
-	if len(args) < 2 || args[1] != "aac" {
-		t.Fatalf("want aac HLS fallback, got %#v", args)
+	if len(args) < 4 || args[0] != "-vn" || args[2] != "aac" {
+		t.Fatalf("want -vn + aac HLS fallback, got %#v", args)
+	}
+}
+
+func TestHLSAudioArgsDropsVideo(t *testing.T) {
+	for _, format := range []string{"original", "aac", "mp3", "opus"} {
+		args := HLSAudioArgs(EncodeOpts{Format: format, BitrateKbps: 192})
+		if len(args) == 0 || args[0] != "-vn" {
+			t.Fatalf("format %q missing -vn: %#v", format, args)
+		}
 	}
 }
 

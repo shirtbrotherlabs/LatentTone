@@ -2,7 +2,7 @@
  * Copyright (C) 2026 martinsah
  * SPDX-License-Identifier: GPL-3.0-only
  * Author: martinsah
- * Date: 2026-07-15
+ * Date: 2026-07-17
  */
 
 import { NavLink, Outlet } from "react-router-dom";
@@ -17,7 +17,7 @@ export function Shell() {
       <aside className="nav">
         <div className="brand">
           LatentTone
-          <span>Now Playing · Affinity · Library</span>
+          <span>Now Playing · Radio · Library</span>
         </div>
         <nav className="nav-links">
           <NavLink
@@ -25,6 +25,9 @@ export function Shell() {
             className={({ isActive }) => (isActive ? "active" : undefined)}
           >
             Now Playing
+          </NavLink>
+          <NavLink to="/radio" className={({ isActive }) => (isActive ? "active" : undefined)}>
+            Radio
           </NavLink>
           <NavLink
             to="/library"

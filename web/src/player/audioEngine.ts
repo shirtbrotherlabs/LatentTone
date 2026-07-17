@@ -17,6 +17,8 @@ export type AttachOpts = {
   trackId?: number;
   /** Prefer progressive (per-track) URL so skip does not wait on FFmpeg HLS. */
   preferProgressive?: boolean;
+  /** Bypass same-key short-circuit (e.g. re-attach after skip confirmed). */
+  force?: boolean;
   onError?: (msg: string) => void;
   onPlayState?: (playing: boolean) => void;
 };
@@ -42,12 +44,14 @@ export class AudioEngine {
   private volume = 0.85;
   private muted = false;
   private preMuteVolume = 0.85;
-  private prefetchAbort: AbortController | null = null;
-  private prefetchUrl = "";
   private playStateHandler: ((playing: boolean) => void) | null = null;
   private endedHandler: (() => void) | null = null;
   /** Bumps on each attach/load so superseded play() promises are ignored. */
   private playEpoch = 0;
+  /** Serializes attach(); stale async attach bodies bail when this advances. */
+  private attachSeq = 0;
+  /** Last successfully requested catalog track id (0 = unknown). */
+  private attachedTrackId = 0;
 
   constructor() {
     this.audio = new Audio();
@@ -189,38 +193,14 @@ export class AudioEngine {
     // Leave at fade floor only until the caller loads the next src and applyGain/softFadeIn.
   }
 
-  /** Abort any in-flight Range prefetch so it cannot race the real attach GET. */
-  private cancelPrefetch() {
-    if (this.prefetchAbort) {
-      this.prefetchAbort.abort();
-      this.prefetchAbort = null;
-    }
-    this.prefetchUrl = "";
-  }
-
   /**
-   * Warm auth/TCP for the next progressive URL with a tiny Range GET.
-   * Do not use a second <audio> — on Android Chrome that can poison the next
-   * play() with an opaque media "couldn't fetch" / network error.
+   * Progressive prefetch is intentionally a no-op when the stream may be
+   * FFmpeg-transcoded (Opus/MP3/AAC prefs). A Range warm-up used to spawn a
+   * full encode that raced the real <audio> GET and froze the server on skip.
+   * Original-file streams are warmed by the browser media element itself.
    */
-  prefetchProgressive(url?: string) {
-    if (!url || url === this.prefetchUrl) return;
-    this.cancelPrefetch();
-    this.prefetchUrl = url;
-    const ac = new AbortController();
-    this.prefetchAbort = ac;
-    const timer = window.setTimeout(() => ac.abort(), 4000);
-    void fetch(url, {
-      credentials: "include",
-      headers: { Range: "bytes=0-2047" },
-      cache: "no-store",
-      signal: ac.signal,
-    })
-      .catch(() => undefined)
-      .finally(() => {
-        window.clearTimeout(timer);
-        if (this.prefetchAbort === ac) this.prefetchAbort = null;
-      });
+  prefetchProgressive(_url?: string) {
+    /* no-op — see comment above */
   }
 
   /** Cancel in-flight play() and bump epoch so late rejects are ignored. */
@@ -380,21 +360,32 @@ export class AudioEngine {
   async attach(opts: AttachOpts) {
     const preferProgressive = opts.preferProgressive !== false;
     // Keep stream paths same-origin relative so reverse proxies need no host rewrite.
-    const progressiveUrl = toSameOriginPath(opts.progressiveUrl);
+    let progressiveUrl = toSameOriginPath(opts.progressiveUrl);
     const hlsUrl = toSameOriginPath(opts.hlsUrl);
     // Relative / same-origin: leave CORS mode off so cookies + browser Basic Auth
     // credentials apply as a normal media request (duration/metadata available).
     this.audio.removeAttribute("crossorigin");
+    const trackId = opts.trackId ?? 0;
+    // Skip confirm often re-calls attach for the same track. Reloading aborts the
+    // in-flight Opus/ffmpeg body and Chrome reports "no supported source was found."
+    if (
+      opts.force &&
+      trackId > 0 &&
+      this.isHealthyForTrack(trackId) &&
+      !this.audio.paused
+    ) {
+      return;
+    }
     const primary =
       preferProgressive && progressiveUrl
         ? progressiveUrl
         : hlsUrl || progressiveUrl || "";
-    const key = `${opts.trackId ?? 0}|${primary}`;
+    const key = `${trackId}|${primary}`;
     if (!primary) {
       opts.onError?.("no playable stream URL");
       return;
     }
-    if (key === this.lastKey) {
+    if (key === this.lastKey && !opts.force) {
       if (this.audio.paused) {
         // Same src re-play (e.g. status poll); restore gain in case a prior fade left it down.
         this.applyGain();
@@ -402,31 +393,34 @@ export class AudioEngine {
       }
       return;
     }
+    // Force-reload of the same URL (error recovery): bust caches / aborted bodies.
+    if (opts.force && progressiveUrl && key === this.lastKey) {
+      const join = progressiveUrl.includes("?") ? "&" : "?";
+      progressiveUrl = `${progressiveUrl}${join}_=${Date.now()}`;
+    }
     if (isDev) {
-      console.debug("[lt-player] attach", { trackId: opts.trackId, primary });
+      console.debug("[lt-player] attach", { trackId, primary: progressiveUrl || primary });
     }
-    // Crossfade-out only while still playing; natural `ended` is already silent.
-    // Spectrum/getAnalyser may have connected the graph already — never softFadeOut
-    // unless media is actually audible, or we silence track 1 before play.
+    // Stop the previous track immediately. Soft-fading while still decoding the old
+    // src raced with skip polls and left the prior song audible after UI advanced.
+    const seq = ++this.attachSeq;
     const wasPlaying = !this.audio.paused && this.audio.readyState > 0;
-    if (wasPlaying) {
-      await this.softFadeOut(60);
-    }
-    this.cancelPrefetch();
+    this.invalidatePlay();
     this.destroyHls();
-    this.lastKey = key;
+    this.lastKey = `${trackId}|${preferProgressive && progressiveUrl ? progressiveUrl.split("?")[0] : primary}`;
+    this.attachedTrackId = trackId;
     this.ensureGraph();
+    if (seq !== this.attachSeq) return;
 
     // Skip / track advance: progressive is per-track and starts without waiting for HLS.
     if (preferProgressive && progressiveUrl) {
-      this.invalidatePlay();
-      this.destroyHls();
       this.audio.src = progressiveUrl;
       try {
         this.audio.load();
       } catch {
         /* ignore */
       }
+      if (seq !== this.attachSeq) return;
       // New media: always snap gain before play (safePlay also restores / fades).
       this.applyGain();
       const epoch = this.playEpoch;
@@ -435,14 +429,17 @@ export class AudioEngine {
         opts.onError?.(detail);
       };
       const onProgError = () => {
-        if (epoch !== this.playEpoch) return;
+        if (epoch !== this.playEpoch || seq !== this.attachSeq) return;
         this.applyGain();
         const detail = this.mediaErrorMessage();
         if (isDev) console.warn("[lt-player] progressive error", detail);
-        if (hlsUrl) {
-          this.lastKey = `${opts.trackId ?? 0}|hls`;
-          void this.attachHls({ ...opts, hlsUrl, progressiveUrl }, (msg) => {
-            reportAttachFail(`${detail}; HLS fallback failed: ${msg}`);
+        // One retry with cache-bust; avoid session HLS (often still the previous track).
+        if (!opts.force && progressiveUrl) {
+          void this.attach({
+            ...opts,
+            progressiveUrl,
+            force: true,
+            onError: opts.onError,
           });
           return;
         }
@@ -453,16 +450,11 @@ export class AudioEngine {
       // on Android when called from the ended handler (do not await canplay first).
       // Short fade-in only when replacing an already-playing track.
       void this.safePlay((msg) => {
-        if (/decode|not supported|format|couldn't fetch/i.test(msg) && hlsUrl) {
-          onProgError();
-          return;
-        }
+        if (seq !== this.attachSeq) return;
+        // Interrupted load from a newer attach — not a user-facing failure.
+        if (/no supported source/i.test(msg) && seq !== this.attachSeq) return;
         reportAttachFail(msg);
       }, wasPlaying);
-      // Warm HLS in the background for clients that later prefer it; failures are ignored.
-      if (hlsUrl) {
-        void fetch(hlsUrl, { credentials: "include", cache: "no-store" }).catch(() => undefined);
-      }
       return;
     }
 
@@ -534,6 +526,22 @@ export class AudioEngine {
     return this.audio.paused;
   }
 
+  /** True when this engine is already loading/playing the given catalog track. */
+  isAttachedToTrack(trackId?: number): boolean {
+    if (!trackId || trackId <= 0) return false;
+    return this.attachedTrackId === trackId && this.lastKey !== "";
+  }
+
+  /**
+   * True when we should not interrupt an in-flight attach for this track.
+   * Buffering counts as healthy — reloading mid-stream aborts FFmpeg/Opus.
+   */
+  isHealthyForTrack(trackId?: number): boolean {
+    if (!this.isAttachedToTrack(trackId)) return false;
+    if (this.audio.error) return false;
+    return true;
+  }
+
   destroyHls() {
     if (this.hls) {
       this.hls.destroy();
@@ -548,7 +556,6 @@ export class AudioEngine {
     this.audio.pause();
     this.audio.removeAttribute("src");
     this.lastKey = "";
-    this.cancelPrefetch();
   }
 }
 

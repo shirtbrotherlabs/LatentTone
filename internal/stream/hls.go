@@ -15,16 +15,21 @@ import (
 	"time"
 )
 
+// Max concurrent progressive (non-HLS) FFmpeg encodes. Rapid skip + browser
+// retries otherwise pile up encodes and starve the API under Opus prefs.
+const maxProgressiveEncodes = 2
+
 // Manager runs FFmpeg HLS generation under /data/hls/{session_id}.
 type Manager struct {
-	HLSRoot    string
+	HLSRoot     string
 	LibraryRoot string
-	FFmpegPath string
-	TTL        time.Duration
-	Log        *log.Logger
+	FFmpegPath  string
+	TTL         time.Duration
+	Log         *log.Logger
 
-	mu   sync.Mutex
-	procs map[string]*exec.Cmd
+	mu      sync.Mutex
+	procs   map[string]*exec.Cmd
+	progSem chan struct{}
 }
 
 // NewManager constructs an HLS manager.
@@ -42,6 +47,7 @@ func NewManager(hlsRoot, libraryRoot, ffmpeg string, ttl time.Duration) *Manager
 		TTL:         ttl,
 		Log:         log.Default(),
 		procs:       make(map[string]*exec.Cmd),
+		progSem:     make(chan struct{}, maxProgressiveEncodes),
 	}
 }
 

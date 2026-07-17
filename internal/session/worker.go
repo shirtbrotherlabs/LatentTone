@@ -229,14 +229,66 @@ func (w *Worker) fillQueue(ctx context.Context, live *Live) error {
 	return w.fillQueueFrom(ctx, live, 0)
 }
 
+// scheduleQueueRefill tops up (or re-anchors) the auto queue asynchronously.
+// Critical: live.mu is NOT held during ANN / LanceDB so short-poll ToStatus and
+// feedback stay responsive (holding the lock through neighbor search caused
+// gateway 504s and a stuck SPA).
+//
+// replaceSeed > 0 drops auto-prefetch and refills biased to that seed (like).
+// replaceSeed == 0 tops up from now-playing / session seed.
+func (w *Worker) scheduleQueueRefill(live *Live, replaceSeed int64) {
+	go func(l *Live, seedOverride int64) {
+		l.mu.Lock()
+		if l.Status == db.SessionStatusStopped {
+			l.mu.Unlock()
+			return
+		}
+		if seedOverride > 0 {
+			pins, _ := w.splitQueue(l)
+			l.Queue = append([]int64(nil), pins...)
+		}
+		l.mu.Unlock()
+
+		// ANN / catalog fallback without the session mutex.
+		if err := w.fillQueueFrom(context.Background(), l, seedOverride); err != nil {
+			return
+		}
+
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		if l.Status == db.SessionStatusStopped {
+			return
+		}
+		_ = w.persist(l, "")
+	}(live, replaceSeed)
+}
+
 // fillQueueFrom tops up auto-prefetched tracks. seedOverride > 0 biases the ANN query
 // (e.g. after a like). Already-queued auto tracks are preserved and topped up.
+//
+// Do not hold live.mu across this call when the session is shared (status polls).
+// Create may call it on a private Live before publishing; scheduleQueueRefill is
+// the safe path for live sessions.
 func (w *Worker) fillQueueFrom(ctx context.Context, live *Live, seedOverride int64) error {
+	// Snapshot under lock so concurrent poll/feedback can proceed during ANN.
+	live.mu.Lock()
 	need := w.QueuePrefetch
 	pins, oldAuto := w.splitQueue(live)
-	// Preserve already-queued auto tracks (and their sources); only top up.
 	existingAuto := append([]int64(nil), oldAuto...)
-	skips, err := w.DB.ListSkippedTrackIDs(live.UserID, live.ID)
+	userID := live.UserID
+	sessionID := live.ID
+	nowPlaying := live.NowPlayingID
+	seedTrack := live.SeedTrackID
+	recent := append([]int64(nil), live.Recent...)
+	tracksSinceBridge := live.TracksSinceBridge
+	bridgeInterval := live.BridgeInterval
+	penalties := map[string]float64{}
+	for k, v := range live.ArtistPenalties {
+		penalties[k] = v
+	}
+	live.mu.Unlock()
+
+	skips, err := w.DB.ListSkippedTrackIDs(userID, sessionID)
 	if err != nil {
 		return err
 	}
@@ -244,7 +296,7 @@ func (w *Worker) fillQueueFrom(ctx context.Context, live *Live, seedOverride int
 	for id := range skips {
 		exclude[id] = struct{}{}
 	}
-	for _, id := range live.Recent {
+	for _, id := range recent {
 		exclude[id] = struct{}{}
 	}
 	for _, id := range pins {
@@ -253,24 +305,27 @@ func (w *Worker) fillQueueFrom(ctx context.Context, live *Live, seedOverride int
 	for _, id := range existingAuto {
 		exclude[id] = struct{}{}
 	}
-	exclude[live.NowPlayingID] = struct{}{}
+	exclude[nowPlaying] = struct{}{}
 
 	needMore := need - len(existingAuto)
 	if needMore <= 0 {
-		live.Queue = append(pins, existingAuto...)
+		live.mu.Lock()
+		defer live.mu.Unlock()
+		pins, oldAuto = w.splitQueue(live)
+		live.Queue = append(pins, oldAuto...)
 		if len(live.Queue) > len(pins)+need {
 			live.Queue = live.Queue[:len(pins)+need]
 		}
 		return nil
 	}
 
-	prefs, _ := w.DB.GetRadioPrefs(live.UserID)
+	prefs, _ := w.DB.GetRadioPrefs(userID)
 	seed := seedOverride
 	if seed == 0 {
-		seed = live.NowPlayingID
+		seed = nowPlaying
 	}
 	if seed == 0 {
-		seed = live.SeedTrackID
+		seed = seedTrack
 	}
 
 	poolK := w.NeighborPool
@@ -279,15 +334,24 @@ func (w *Worker) fillQueueFrom(ctx context.Context, live *Live, seedOverride int
 	}
 	candidates, err := w.queryNeighbors(ctx, seed, poolK, prefs)
 	if err != nil || len(candidates) == 0 {
-		// Fallback: any non-missing catalog track (enables smoke without embeds).
 		ids, ferr := w.DB.ListTrackIDsNotMissing(needMore + 5)
+		live.mu.Lock()
+		defer live.mu.Unlock()
+		pins, oldAuto = w.splitQueue(live)
 		if ferr != nil {
-			live.Queue = append(pins, existingAuto...)
+			live.Queue = append(pins, oldAuto...)
 			return nil
 		}
-		auto := existingAuto
+		auto := append([]int64(nil), oldAuto...)
+		seen := map[int64]struct{}{}
+		for _, id := range auto {
+			seen[id] = struct{}{}
+		}
 		for _, id := range ids {
 			if _, bad := exclude[id]; bad {
+				continue
+			}
+			if _, ok := seen[id]; ok {
 				continue
 			}
 			auto = append(auto, id)
@@ -308,7 +372,7 @@ func (w *Worker) fillQueueFrom(ctx context.Context, live *Live, seedOverride int
 		if err != nil || t == nil || t.MissingAt.Valid {
 			continue
 		}
-		aff, _ := w.DB.GetAffinity(live.UserID, n.TrackID)
+		aff, _ := w.DB.GetAffinity(userID, n.TrackID)
 		pool = append(pool, affinity.Candidate{
 			TrackID:   n.TrackID,
 			Artist:    t.ArtistName,
@@ -317,9 +381,15 @@ func (w *Worker) fillQueueFrom(ctx context.Context, live *Live, seedOverride int
 		})
 	}
 
+	// recentArtists / bridgeCandidates need live — briefly lock for reads.
+	live.mu.Lock()
 	recentArtists := w.recentArtists(live)
 	bridgeCands := w.bridgeCandidates(live, exclude, prefs)
 	bridgeDue := prefs.RadioBridge && !live.BridgeQueued && live.TracksSinceBridge >= w.bridgeInterval(live)
+	if bridgeInterval <= 0 {
+		bridgeInterval = live.BridgeInterval
+	}
+	live.mu.Unlock()
 
 	res := affinity.SelectDiversified(pool, affinity.SelectOpts{
 		Need:              needMore,
@@ -329,19 +399,30 @@ func (w *Worker) fillQueueFrom(ctx context.Context, live *Live, seedOverride int
 		BoundedRandom:     prefs.BoundedRandom,
 		TopN:              affinity.DefaultTopN,
 		RecentArtists:     recentArtists,
-		ArtistPenalties:   live.ArtistPenalties,
+		ArtistPenalties:   penalties,
 		Exclude:           exclude,
 		RNG:               w.rng(),
 		BridgeEnabled:     bridgeDue,
-		TracksSinceBridge: live.TracksSinceBridge,
-		BridgeInterval:    w.bridgeInterval(live),
+		TracksSinceBridge: tracksSinceBridge,
+		BridgeInterval:    bridgeInterval,
 		BridgeCandidates:  bridgeCands,
 	})
 
+	live.mu.Lock()
+	defer live.mu.Unlock()
 	w.ensurePinned(live)
-	auto := existingAuto
+	pins, oldAuto = w.splitQueue(live)
+	auto := append([]int64(nil), oldAuto...)
+	seen := map[int64]struct{}{}
+	for _, id := range auto {
+		seen[id] = struct{}{}
+	}
 	for _, p := range res.Picks {
+		if _, ok := seen[p.TrackID]; ok {
+			continue
+		}
 		auto = append(auto, p.TrackID)
+		seen[p.TrackID] = struct{}{}
 		if p.Source != "" && p.Source != "neighbor" {
 			live.Sources[p.TrackID] = p.Source
 		}
@@ -493,7 +574,13 @@ func (w *Worker) Advance(ctx context.Context, live *Live) error {
 
 func (w *Worker) advanceLocked(ctx context.Context, live *Live) error {
 	if len(live.Queue) == 0 {
-		_ = w.fillQueue(ctx, live)
+		// fillQueueFrom locks internally — must not call while holding live.mu.
+		live.mu.Unlock()
+		_ = w.fillQueueFrom(ctx, live, 0)
+		live.mu.Lock()
+		if live.Status == db.SessionStatusStopped {
+			return fmt.Errorf("session stopped")
+		}
 	}
 	if len(live.Queue) == 0 {
 		live.Status = db.SessionStatusStopped
@@ -520,21 +607,16 @@ func (w *Worker) advanceLocked(ctx context.Context, live *Live) error {
 	if err := w.persist(live, ""); err != nil {
 		return err
 	}
-	_, _ = w.DB.InsertPlaybackEvent(live.UserID, next, live.ID)
+	userID := live.UserID
+	sid, tid := live.ID, next
 	if w.OnAdvance != nil {
-		sid, tid := live.ID, next
 		go w.OnAdvance(sid, tid)
 	}
-	// Top up the auto queue after the lock is released (goroutine waits on mu).
-	go func(l *Live) {
-		l.mu.Lock()
-		defer l.mu.Unlock()
-		if l.Status == db.SessionStatusStopped {
-			return
-		}
-		_ = w.fillQueue(context.Background(), l)
-		_ = w.persist(l, "")
-	}(live)
+	w.scheduleQueueRefill(live, 0)
+	// Playback history insert outside the hot path callers still hold live.mu.
+	go func() {
+		_, _ = w.DB.InsertPlaybackEvent(userID, tid, sid)
+	}()
 	return nil
 }
 
@@ -566,40 +648,84 @@ func (w *Worker) onTrackStarted(live *Live, trackID int64, source string) {
 }
 
 // ApplyFeedback persists signal and mutates queue (ADR-007).
+// DB writes (feedback / affinity / skips) run without live.mu so short-poll
+// ToStatus cannot wedge behind MariaDB. Queue mutation + persist stay locked;
+// ANN refill is always async.
 func (w *Worker) ApplyFeedback(ctx context.Context, live *Live, signal string, trackID int64) error {
 	live.mu.Lock()
-	defer live.mu.Unlock()
 	if trackID == 0 {
 		trackID = live.NowPlayingID
 	}
-	if err := w.DB.InsertTrackFeedback(live.UserID, trackID, signal, live.ID); err != nil {
+	userID := live.UserID
+	sessionID := live.ID
+	live.mu.Unlock()
+
+	prevSignals := map[int64]string{}
+	if signal == db.SignalClear {
+		prevSignals, _ = w.DB.LatestLikeDislikeSignals(userID, []int64{trackID})
+	}
+	if err := w.DB.InsertTrackFeedback(userID, trackID, signal, sessionID); err != nil {
 		return err
 	}
+
+	switch signal {
+	case db.SignalLike:
+		_, _ = w.DB.UpsertAffinity(userID, trackID, 0.25)
+	case db.SignalClear:
+		switch prevSignals[trackID] {
+		case db.SignalLike:
+			_, _ = w.DB.UpsertAffinity(userID, trackID, -0.25)
+		case db.SignalDislike:
+			_, _ = w.DB.UpsertAffinity(userID, trackID, 0.25)
+		}
+	case db.SignalDislike:
+		_, _ = w.DB.UpsertAffinity(userID, trackID, -0.25)
+		_ = w.DB.AddSkip(userID, trackID, db.SkipScopeSession, sessionID)
+	case db.SignalSkip:
+		_ = w.DB.AddSkip(userID, trackID, db.SkipScopeSession, sessionID)
+		_, _ = w.DB.UpsertAffinity(userID, trackID, -0.1)
+	case db.SignalBan:
+		_ = w.DB.AddSkip(userID, trackID, db.SkipScopeLibrary, "")
+		_, _ = w.DB.UpsertAffinity(userID, trackID, -1)
+	case db.SignalComplete:
+		// no affinity / skip side effects
+	default:
+		return fmt.Errorf("unknown signal %q", signal)
+	}
+
+	live.mu.Lock()
+	defer live.mu.Unlock()
 	ack := FeedbackAck{Signal: signal, TrackID: trackID, At: db.Now()}
 	live.LastFeedback = ack
 	fb, _ := json.Marshal(ack)
 
+	var (
+		asyncRefill      bool
+		asyncReplaceSeed int64
+		asyncTopUp       bool
+	)
+
 	switch signal {
 	case db.SignalLike:
-		_, _ = w.DB.UpsertAffinity(live.UserID, trackID, 0.25)
-		pins, _ := w.splitQueue(live)
-		live.Queue = append([]int64(nil), pins...)
-		_ = w.fillQueueFrom(ctx, live, trackID)
+		// Only re-anchor the auto queue when liking now-playing; history likes
+		// still bump affinity (above) without blocking on ANN.
+		if trackID == live.NowPlayingID {
+			asyncReplaceSeed = trackID
+			asyncRefill = true
+		}
+	case db.SignalClear:
+		// affinity already adjusted; no queue mutation
 	case db.SignalDislike:
-		_, _ = w.DB.UpsertAffinity(live.UserID, trackID, -0.25)
-		_ = w.DB.AddSkip(live.UserID, trackID, db.SkipScopeSession, live.ID)
 		live.Queue = filterOut(live.Queue, trackID)
-		// Player thumbs-down: leave the current track immediately (same as skip, stronger penalty).
 		if live.NowPlayingID == trackID {
 			if err := w.advanceLocked(ctx, live); err != nil {
 				return err
 			}
 		} else {
-			_ = w.fillQueue(ctx, live)
+			asyncTopUp = true
+			asyncRefill = true
 		}
 	case db.SignalSkip:
-		_ = w.DB.AddSkip(live.UserID, trackID, db.SkipScopeSession, live.ID)
-		_, _ = w.DB.UpsertAffinity(live.UserID, trackID, -0.1)
 		live.Queue = filterOut(live.Queue, trackID)
 		if live.NowPlayingID == trackID {
 			if err := w.advanceLocked(ctx, live); err != nil {
@@ -607,7 +733,6 @@ func (w *Worker) ApplyFeedback(ctx context.Context, live *Live, signal string, t
 			}
 		}
 	case db.SignalComplete:
-		// Natural end of progressive/HLS item: advance without session-skip or affinity penalty.
 		live.Queue = filterOut(live.Queue, trackID)
 		if live.NowPlayingID == trackID {
 			if err := w.advanceLocked(ctx, live); err != nil {
@@ -615,18 +740,27 @@ func (w *Worker) ApplyFeedback(ctx context.Context, live *Live, signal string, t
 			}
 		}
 	case db.SignalBan:
-		_ = w.DB.AddSkip(live.UserID, trackID, db.SkipScopeLibrary, "")
-		_, _ = w.DB.UpsertAffinity(live.UserID, trackID, -1)
 		live.Queue = filterOut(live.Queue, trackID)
 		if live.NowPlayingID == trackID {
 			if err := w.advanceLocked(ctx, live); err != nil {
 				return err
 			}
+		} else {
+			asyncTopUp = true
+			asyncRefill = true
 		}
-	default:
-		return fmt.Errorf("unknown signal %q", signal)
 	}
-	return w.persist(live, string(fb))
+	if err := w.persist(live, string(fb)); err != nil {
+		return err
+	}
+	if asyncRefill {
+		if asyncReplaceSeed > 0 {
+			w.scheduleQueueRefill(live, asyncReplaceSeed)
+		} else if asyncTopUp {
+			w.scheduleQueueRefill(live, 0)
+		}
+	}
+	return nil
 }
 
 // Back restores the previous track from History (played/skipped).
@@ -661,15 +795,7 @@ func (w *Worker) Back(ctx context.Context, live *Live) error {
 		sid, tid := live.ID, prev
 		go w.OnAdvance(sid, tid)
 	}
-	go func(l *Live) {
-		l.mu.Lock()
-		defer l.mu.Unlock()
-		if l.Status == db.SessionStatusStopped {
-			return
-		}
-		_ = w.fillQueue(context.Background(), l)
-		_ = w.persist(l, "")
-	}(live)
+	w.scheduleQueueRefill(live, 0)
 	_ = ctx
 	return nil
 }
@@ -723,8 +849,12 @@ func (w *Worker) InjectQueue(ctx context.Context, live *Live, trackID int64, pos
 	live.Pinned[trackID] = struct{}{}
 	live.Sources[trackID] = "user_pin"
 	live.Queue = append(pins, auto...)
-	_ = w.fillQueue(ctx, live)
-	return w.persist(live, "")
+	if err := w.persist(live, ""); err != nil {
+		return err
+	}
+	w.scheduleQueueRefill(live, 0)
+	_ = ctx
+	return nil
 }
 
 // RemoveFromQueue drops a track from the upcoming queue, session-skips it so
@@ -746,8 +876,12 @@ func (w *Worker) RemoveFromQueue(ctx context.Context, live *Live, trackID int64)
 	delete(live.Pinned, trackID)
 	delete(live.Sources, trackID)
 	_ = w.DB.AddSkip(live.UserID, trackID, db.SkipScopeSession, live.ID)
-	_ = w.fillQueue(ctx, live)
-	return w.persist(live, "")
+	if err := w.persist(live, ""); err != nil {
+		return err
+	}
+	w.scheduleQueueRefill(live, 0)
+	_ = ctx
+	return nil
 }
 
 // errQueueConflict is returned when the track is already playing (cannot re-queue as next).

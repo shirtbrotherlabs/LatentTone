@@ -502,7 +502,19 @@ func (s *Server) handleTrackStream(w http.ResponseWriter, r *http.Request) {
 				})
 				return
 			}
-			if err := s.HLS.ServeProgressiveTranscode(w, abs, enc); err != nil {
+			// Chrome's <audio> always sends open-ended "Range: bytes=0-" on load —
+			// stream the full encode (Accept-Ranges: none). Closed probes like the
+			// SPA's former "bytes=0-2047" warm-up must NOT start FFmpeg or rapid
+			// skip piles up encodes and freezes the box.
+			if stream.IsTranscodeRangeProbe(r.Header.Get("Range")) {
+				_, _, ctype, _ := stream.ResolveEncodeTarget(enc)
+				w.Header().Set("Content-Type", ctype)
+				w.Header().Set("Accept-Ranges", "none")
+				w.Header().Set("Cache-Control", "private, no-store")
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			if err := s.HLS.ServeProgressiveTranscode(r.Context(), w, abs, enc); err != nil {
 				// Headers may already be sent; best-effort log via JSON only when possible.
 				s.Log.Printf("track %d stream transcode: %v", id, err)
 			}

@@ -2,7 +2,7 @@
  * Copyright (C) 2026 martinsah
  * SPDX-License-Identifier: GPL-3.0-only
  * Author: martinsah
- * Date: 2026-07-16
+ * Date: 2026-07-17
  */
 
 import type { ReactNode } from "react";
@@ -25,6 +25,8 @@ type Props = {
   rowClassName?: (track: TrackTableRow, index: number) => string | undefined;
   renderTitleBadge?: (track: TrackTableRow) => ReactNode;
   renderTrailing?: (track: TrackTableRow, index: number) => ReactNode;
+  /** When set, thumbs become buttons that post like/dislike/clear. */
+  onFeedback?: (trackId: number, signal: "like" | "dislike" | "clear") => void;
 };
 
 function trackId(t: TrackTableRow): number {
@@ -66,6 +68,7 @@ export function TrackTable({
   rowClassName,
   renderTitleBadge,
   renderTrailing,
+  onFeedback,
 }: Props) {
   if (!tracks.length) {
     return <p className="muted">No tracks.</p>;
@@ -139,17 +142,42 @@ export function TrackTable({
               <td className="track-meta track-table-duration-col">{formatDuration(t.duration_ms)}</td>
               <td className="track-meta track-table-plays-col">{plays}</td>
               <td className="track-table-rating-col">
-                <span
-                  className="track-table-thumbs"
-                  aria-label={liked ? "Liked" : disliked ? "Disliked" : "No rating"}
-                >
-                  <span className={liked ? "is-on" : undefined} title="Like">
-                    <ThumbUpMini filled={liked} />
+                {onFeedback ? (
+                  <span className="track-table-thumbs">
+                    <button
+                      type="button"
+                      className={`track-table-thumb-btn${liked ? " is-on" : ""}`}
+                      title={liked ? "Remove like" : "Like"}
+                      aria-label={liked ? "Remove like" : "Like"}
+                      aria-pressed={liked}
+                      onClick={() => onFeedback(id, liked ? "clear" : "like")}
+                    >
+                      <ThumbUpMini filled={liked} />
+                    </button>
+                    <button
+                      type="button"
+                      className={`track-table-thumb-btn${disliked ? " is-on" : ""}`}
+                      title={disliked ? "Remove dislike" : "Dislike"}
+                      aria-label={disliked ? "Remove dislike" : "Dislike"}
+                      aria-pressed={disliked}
+                      onClick={() => onFeedback(id, disliked ? "clear" : "dislike")}
+                    >
+                      <ThumbDownMini filled={disliked} />
+                    </button>
                   </span>
-                  <span className={disliked ? "is-on" : undefined} title="Dislike">
-                    <ThumbDownMini filled={disliked} />
+                ) : (
+                  <span
+                    className="track-table-thumbs"
+                    aria-label={liked ? "Liked" : disliked ? "Disliked" : "No rating"}
+                  >
+                    <span className={liked ? "is-on" : undefined} title="Like">
+                      <ThumbUpMini filled={liked} />
+                    </span>
+                    <span className={disliked ? "is-on" : undefined} title="Dislike">
+                      <ThumbDownMini filled={disliked} />
+                    </span>
                   </span>
-                </span>
+                )}
               </td>
               <td className="track-table-actions-col">
                 <TrackActions track={{ ...t, id }} />

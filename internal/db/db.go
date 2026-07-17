@@ -155,9 +155,10 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 	return nil
 }
 
-// Now returns RFC3339 UTC timestamp text.
+// Now returns RFC3339Nano UTC timestamp text (nanoseconds avoid same-second
+// collisions when ranking latest track_feedback rows).
 func Now() string {
-	return time.Now().UTC().Format(time.RFC3339)
+	return time.Now().UTC().Format(time.RFC3339Nano)
 }
 
 // NullString returns sql.NullString for empty → NULL.

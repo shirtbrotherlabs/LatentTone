@@ -32,6 +32,8 @@ docker compose up --build -d browse
 
 Compose brings up a `mariadb` service (catalog / users / vectors status) alongside `browse`, and waits for its healthcheck before starting. Covers, HLS segments, and the LanceDB vector index stay on the `${DATA_DIR:-./data}` filesystem volume.
 
+The `browse` container runs `serve` under an in-container watchdog (`scripts/serve-watchdog.sh`): every 60s it probes `GET /api/v1/config` with a 30s curl timeout and restarts the server if the probe fails (90s grace after start/restart). Compose `restart: unless-stopped` still applies if the whole container exits.
+
 **Product client:** <http://localhost:8080/> (redirects to `/app/`)  
 Operator catalog inspector: <http://localhost:8080/browse>
 

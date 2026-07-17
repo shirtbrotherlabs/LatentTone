@@ -6,12 +6,14 @@
 package stream
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // EncodeOpts controls progressive/HLS audio encode targets.
@@ -158,26 +160,71 @@ func ResolveEncodeTarget(opts EncodeOpts) (codec, format, contentType, bitrate s
 }
 
 // HLSAudioArgs returns FFmpeg audio encode args for session HLS packaging.
+// Always includes -vn so embedded cover art (common in MP3/FLAC) is not
+// treated as a video stream — libx264 then fails on odd cover dimensions.
 func HLSAudioArgs(opts EncodeOpts) []string {
 	bitrate := fmt.Sprintf("%dk", bitrateOrDefault(opts.BitrateKbps))
 	switch strings.ToLower(strings.TrimSpace(opts.Format)) {
 	case "mp3":
 		// HLS with MP3 audio in MPEG-TS is widely supported.
-		return []string{"-c:a", "libmp3lame", "-b:a", bitrate}
+		return []string{"-vn", "-c:a", "libmp3lame", "-b:a", bitrate}
 	case "opus":
 		// Opus-in-MPEG-TS is poorly supported by hls.js/Safari; keep AAC for HLS
 		// fallback while progressive serves Opus.
-		return []string{"-c:a", "aac", "-b:a", bitrate}
+		return []string{"-vn", "-c:a", "aac", "-b:a", bitrate}
 	default:
 		// original preference and aac both use AAC in HLS (browser-safe).
-		return []string{"-c:a", "aac", "-b:a", bitrate}
+		return []string{"-vn", "-c:a", "aac", "-b:a", bitrate}
 	}
 }
 
+// IsTranscodeRangeProbe reports whether Range is a closed warm-up probe
+// (e.g. bytes=0-2047) rather than a media-player open-ended request (bytes=0-).
+// Closed probes must not start FFmpeg; open-ended ranges must stream the full
+// encode because Chrome's <audio> always sends Range: bytes=0- on load.
+func IsTranscodeRangeProbe(rangeHeader string) bool {
+	h := strings.TrimSpace(rangeHeader)
+	if h == "" {
+		return false
+	}
+	lower := strings.ToLower(h)
+	if !strings.HasPrefix(lower, "bytes=") {
+		return true
+	}
+	spec := strings.TrimSpace(h[len("bytes="):])
+	if i := strings.IndexByte(spec, ','); i >= 0 {
+		spec = strings.TrimSpace(spec[:i])
+	}
+	parts := strings.SplitN(spec, "-", 2)
+	if len(parts) != 2 {
+		return true
+	}
+	end := strings.TrimSpace(parts[1])
+	// bytes=0- / bytes=123- → open-ended media fetch
+	if end == "" {
+		return false
+	}
+	// bytes=0-2047 → closed probe
+	return true
+}
+
 // ServeProgressiveTranscode pipes FFmpeg stdout to the HTTP response.
-func (m *Manager) ServeProgressiveTranscode(w http.ResponseWriter, absPath string, opts EncodeOpts) error {
+// ctx should be the request context — on cancel (skip / navigation) FFmpeg is
+// killed so orphaned encodes cannot pile up and starve the server.
+func (m *Manager) ServeProgressiveTranscode(ctx context.Context, w http.ResponseWriter, absPath string, opts EncodeOpts) error {
 	if err := assertUnderRoot(m.LibraryRoot, absPath); err != nil {
 		return err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if m.progSem != nil {
+		select {
+		case m.progSem <- struct{}{}:
+			defer func() { <-m.progSem }()
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	codec, format, ctype, bitrate := ResolveEncodeTarget(opts)
 	cmd := exec.Command(m.FFmpegPath,
@@ -199,13 +246,46 @@ func (m *Manager) ServeProgressiveTranscode(w http.ResponseWriter, absPath strin
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("ffmpeg start: %w", err)
 	}
+
+	var killOnce sync.Once
+	kill := func() {
+		killOnce.Do(func() {
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+		})
+	}
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			kill()
+		case <-done:
+		}
+	}()
+
 	w.Header().Set("Content-Type", ctype)
 	w.Header().Set("Accept-Ranges", "none")
 	w.Header().Set("Cache-Control", "private, no-store")
 	w.WriteHeader(http.StatusOK)
+
+	// Drain stderr concurrently so a full pipe cannot stall FFmpeg while we copy stdout.
+	errCh := make(chan []byte, 1)
+	go func() {
+		buf, _ := io.ReadAll(io.LimitReader(stderr, 4<<10))
+		errCh <- buf
+	}()
+
 	_, copyErr := io.Copy(w, stdout)
-	errBuf, _ := io.ReadAll(io.LimitReader(stderr, 4<<10))
+	if copyErr != nil || ctx.Err() != nil {
+		kill()
+	}
 	waitErr := cmd.Wait()
+	errBuf := <-errCh
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if copyErr != nil {
 		return copyErr
 	}

@@ -15,6 +15,7 @@ import (
 const (
 	SignalLike     = "like"
 	SignalDislike  = "dislike"
+	SignalClear    = "clear" // revoke latest like/dislike for display (un-thumb)
 	SignalSkip     = "skip"
 	SignalBan      = "ban"
 	SignalComplete = "complete" // natural track end — advance without skip penalty
@@ -115,7 +116,8 @@ WHERE user_id = ? AND (scope = ? OR (scope = ? AND session_key = ?))`,
 }
 
 // LatestLikeDislikeSignals returns the newest like/dislike signal per track for a user.
-// Tracks with no like/dislike feedback are omitted from the map.
+// Tracks with no like/dislike feedback are omitted from the map. A newer "clear"
+// signal clears the rating (track omitted).
 func (d *DB) LatestLikeDislikeSignals(userID int64, trackIDs []int64) (map[int64]string, error) {
 	out := make(map[int64]string)
 	if len(trackIDs) == 0 {
@@ -148,15 +150,15 @@ func (d *DB) LatestLikeDislikeSignals(userID int64, trackIDs []int64) (map[int64
 SELECT tf.track_id, tf.` + "`signal`" + `
 FROM track_feedback tf
 INNER JOIN (
-  SELECT track_id, MAX(created_at) AS max_at
+  SELECT track_id, MAX(id) AS max_id
   FROM track_feedback
   WHERE user_id = ?
-    AND ` + "`signal`" + ` IN ('like', 'dislike')
+    AND ` + "`signal`" + ` IN ('like', 'dislike', 'clear')
     AND track_id IN (` + strings.Join(placeholders, ",") + `)
   GROUP BY track_id
-) latest ON latest.track_id = tf.track_id AND latest.max_at = tf.created_at
+) latest ON latest.track_id = tf.track_id AND latest.max_id = tf.id
 WHERE tf.user_id = ?
-  AND tf.` + "`signal`" + ` IN ('like', 'dislike')`
+  AND tf.` + "`signal`" + ` IN ('like', 'dislike', 'clear')`
 	args = append(args, userID)
 	rows, err := d.SQL.Query(q, args...)
 	if err != nil {
@@ -168,6 +170,9 @@ WHERE tf.user_id = ?
 		var signal string
 		if err := rows.Scan(&id, &signal); err != nil {
 			return nil, err
+		}
+		if signal == SignalClear {
+			continue
 		}
 		out[id] = signal
 	}

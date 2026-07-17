@@ -212,3 +212,28 @@ func TestUserStateOwnershipHelpers(t *testing.T) {
 		t.Fatal("skip missing")
 	}
 }
+
+func TestClearRevokesLatestLike(t *testing.T) {
+	catalog, userID, _, id1, _, _ := seedDB(t)
+	defer catalog.Close()
+	if err := catalog.InsertTrackFeedback(userID, id1, db.SignalLike, "sess"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := catalog.LatestLikeDislikeSignals(userID, []int64{id1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[id1] != db.SignalLike {
+		t.Fatalf("want like got %q", got[id1])
+	}
+	if err := catalog.InsertTrackFeedback(userID, id1, db.SignalClear, "sess"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = catalog.LatestLikeDislikeSignals(userID, []int64{id1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got[id1]; ok {
+		t.Fatalf("clear should omit rating, got %q", got[id1])
+	}
+}

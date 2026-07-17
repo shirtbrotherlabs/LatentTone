@@ -448,20 +448,26 @@ export function FloatingPlayer() {
           <button
             type="button"
             className={`btn-icon btn-transport${trackFeedback === "like" ? " is-active" : ""}`}
-            aria-label="Like"
-            title="Like"
+            aria-label={trackFeedback === "like" ? "Remove like" : "Like"}
+            title={trackFeedback === "like" ? "Remove like" : "Like"}
             aria-pressed={trackFeedback === "like"}
-            onClick={() => void feedback("like")}
+            onClick={() =>
+              void feedback(trackFeedback === "like" ? "clear" : "like")
+            }
           >
             <ThumbUpIcon filled={trackFeedback === "like"} />
           </button>
           <button
             type="button"
             className={`btn-icon btn-transport${trackFeedback === "dislike" ? " is-active" : ""}`}
-            aria-label="Dislike and skip"
-            title="Dislike and skip to next"
+            aria-label={trackFeedback === "dislike" ? "Remove dislike" : "Dislike and skip"}
+            title={
+              trackFeedback === "dislike" ? "Remove dislike" : "Dislike and skip to next"
+            }
             aria-pressed={trackFeedback === "dislike"}
-            onClick={() => void feedback("dislike")}
+            onClick={() =>
+              void feedback(trackFeedback === "dislike" ? "clear" : "dislike")
+            }
           >
             <ThumbDownIcon filled={trackFeedback === "dislike"} />
           </button>

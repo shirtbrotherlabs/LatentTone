@@ -54,8 +54,12 @@ COPY configs/metadata-ml.yaml /config/metadata-ml.yaml
 COPY configs/essentia_profile.yaml /config/essentia_profile.yaml
 COPY scripts/lance_helper.py /usr/local/lib/latenttone/lance_helper.py
 COPY scripts/ml_embed_helper.py /usr/local/lib/latenttone/ml_embed_helper.py
+COPY scripts/serve-watchdog.sh /usr/local/bin/serve-watchdog.sh
+RUN chmod +x /usr/local/bin/serve-watchdog.sh
 
 VOLUME ["/data"]
 EXPOSE 8080
-ENTRYPOINT ["/usr/local/bin/latenttone"]
+HEALTHCHECK --interval=60s --timeout=35s --start-period=90s --retries=2 \
+  CMD curl -sf --max-time 30 http://127.0.0.1:8080/api/v1/config || exit 1
+ENTRYPOINT ["/usr/local/bin/serve-watchdog.sh"]
 CMD ["serve", "--config", "/config/scanner.yaml", "--meta", "/config/metadata.yaml"]

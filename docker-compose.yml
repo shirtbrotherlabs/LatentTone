@@ -42,6 +42,12 @@ services:
       - "serve"
       - "--config=/config/scanner.yaml"
       - "--meta=/config/metadata.yaml"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "--max-time", "30", "http://127.0.0.1:8080/api/v1/config"]
+      interval: 60s
+      timeout: 35s
+      retries: 2
+      start_period: 90s
     restart: unless-stopped
 
   browse-stream:
@@ -69,6 +75,12 @@ services:
       - "serve"
       - "--config=/config/scanner.yaml"
       - "--meta=/config/metadata.yaml"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "--max-time", "30", "http://127.0.0.1:8080/api/v1/config"]
+      interval: 60s
+      timeout: 35s
+      retries: 2
+      start_period: 90s
     restart: "no"
 
   scan:

@@ -296,7 +296,7 @@ paths:
       tags: [feedback]
       summary: Apply feedback signal
       description: |
-        Signals: `like`, `dislike`, `skip`, `ban`, `complete` (natural end).
+        Signals: `like`, `dislike`, `clear` (un-thumb), `skip`, `ban`, `complete` (natural end).
         Optional `track_id` defaults to
         the session's current now-playing track. Response is the updated session status
         (field names match `stream_smoke.sh`).
@@ -1386,7 +1386,7 @@ components:
       properties:
         signal:
           type: string
-          enum: [like, dislike, skip, ban, complete]
+          enum: [like, dislike, clear, skip, ban, complete]
         track_id:
           type: integer
           format: int64
@@ -1452,10 +1452,11 @@ components:
       properties:
         signal:
           type: string
-          enum: [like, dislike, skip, ban, complete]
+          enum: [like, dislike, clear, skip, ban, complete]
           description: |
             `complete` = natural track end (client `ended`); advances without
-            session-skip / affinity penalty.
+            session-skip / affinity penalty. `clear` = revoke the latest
+            like/dislike for the track (un-thumb).
         track_id:
           type: integer
           format: int64

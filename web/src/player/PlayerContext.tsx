@@ -79,7 +79,7 @@ type PlayerState = {
   resumeStation: (station: Station) => Promise<void>;
   /** End the listening session (Settings / Now Playing). Not the floating transport pause. */
   stop: () => Promise<void>;
-  feedback: (signal: string) => Promise<void>;
+  feedback: (signal: string, trackId?: number) => Promise<void>;
   /** Previous track in session history, or restart current from 0. */
   goBack: () => Promise<void>;
   playNext: (trackId: number) => Promise<void>;
@@ -120,8 +120,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const holdWakeLockRef = useRef(false);
   /** Guard against overlapping natural-end advances. */
   const advancingRef = useRef(false);
+  /** While skip/dislike advance is in flight, ignore poll snapshots of the old track. */
+  const skipAdvanceRef = useRef<{ fromTrackId: number; toTrackId?: number } | null>(null);
   const goBackRef = useRef<() => Promise<void>>(async () => undefined);
-  const feedbackRef = useRef<(signal: string) => Promise<void>>(async () => undefined);
+  const feedbackRef = useRef<(signal: string, trackId?: number) => Promise<void>>(
+    async () => undefined,
+  );
   const statusRef = useRef<SessionStatus | null>(null);
   statusRef.current = status;
 
@@ -337,6 +341,18 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         const s = await api.getSession(id);
         if (cancelled) return;
         failStreak = 0;
+        const advancing = skipAdvanceRef.current;
+        if (advancing && s.now_playing?.track_id === advancing.fromTrackId) {
+          // Stale poll still on the skipped track — don't re-attach it over the next song.
+          return;
+        }
+        if (
+          advancing &&
+          advancing.toTrackId != null &&
+          s.now_playing?.track_id === advancing.toTrackId
+        ) {
+          skipAdvanceRef.current = null;
+        }
         setStatus(s);
         // Poll used to leave "Failed to fetch" stuck after brief outages (rebuilds, 502s).
         setError((prev) => (isTransientNetworkError(prev) ? null : prev));
@@ -406,7 +422,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         resolved.push({
           ...track,
           source: q.source,
-          feedback: q.feedback ?? track.feedback,
+          // Session enrichment is authoritative; do not fall back to catalog
+          // track.feedback (stale cache would block un-thumb / clear).
+          feedback: q.feedback,
           play_count: q.play_count ?? track.play_count,
         });
       }
@@ -571,16 +589,68 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   }, [status?.id]);
 
   const feedback = useCallback(
-    async (signal: string) => {
+    async (signal: string, trackId?: number) => {
       const id = sessionIdRef.current || status?.id;
       if (!id) throw new Error("no active session");
+      const nowId = status?.now_playing?.track_id;
+      const targetId = trackId && trackId > 0 ? trackId : nowId;
+      const targetsNow = !trackId || trackId <= 0 || trackId === nowId;
       const isSkip = signal === "skip";
-      const isAdvance = isSkip || signal === "complete" || signal === "dislike";
-      if (isSkip || signal === "dislike") setSkipping(true);
-      if (signal === "like" || signal === "dislike") {
-        setTrackFeedback(signal);
+      const isAdvance =
+        (isSkip || signal === "complete" || signal === "dislike") && targetsNow;
+      if ((isSkip || signal === "dislike") && targetsNow) setSkipping(true);
+      if (isAdvance && nowId) {
+        skipAdvanceRef.current = { fromTrackId: nowId };
       }
-      let didOptimisticAttach = false;
+      if (targetsNow) {
+        if (signal === "like" || signal === "dislike") {
+          setTrackFeedback(signal);
+        } else if (signal === "clear") {
+          setTrackFeedback(null);
+        }
+      }
+
+      const patchRefFeedback = <T extends { track_id: number; feedback?: string }>(
+        refs: T[] | undefined,
+      ): T[] => {
+        if (!refs || !targetId) return refs ?? [];
+        return refs.map((r) => {
+          if (r.track_id !== targetId) return r;
+          if (signal === "clear") {
+            return { ...r, feedback: undefined };
+          }
+          if (signal === "like" || signal === "dislike") {
+            return { ...r, feedback: signal };
+          }
+          return r;
+        });
+      };
+
+      // Optimistic thumbs on history / queue / now-playing so UI does not wait on ANN.
+      if (
+        status &&
+        targetId &&
+        (signal === "like" || signal === "dislike" || signal === "clear")
+      ) {
+        setStatus({
+          ...status,
+          history: status.history ? patchRefFeedback(status.history) : status.history,
+          queue: patchRefFeedback(status.queue),
+          now_playing:
+            status.now_playing && status.now_playing.track_id === targetId
+              ? signal === "clear"
+                ? { ...status.now_playing, feedback: undefined }
+                : { ...status.now_playing, feedback: signal }
+              : status.now_playing,
+          last_feedback: {
+            signal,
+            track_id: targetId,
+            at: new Date().toISOString(),
+          },
+        });
+        setError(null);
+      }
+
       try {
         // Optimistic: flip to queue head + attach same <audio> before round-trip.
         // Critical for Android natural-end (complete) so play() stays in media continuity.
@@ -594,6 +664,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
               ? [...prevHistory, { track_id: leaving }].slice(-8)
               : prevHistory;
           const progressiveUrl = `/api/v1/tracks/${nextId}/stream`;
+          skipAdvanceRef.current = { fromTrackId: leaving ?? nowId ?? 0, toTrackId: nextId };
           setError(null);
           setStatus({
             ...status,
@@ -613,49 +684,60 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           setPaused(false);
           holdWakeLockRef.current = true;
           void acquireWakeLock();
-          didOptimisticAttach = true;
           void engineRef.current?.attach({
             progressiveUrl,
             hlsUrl: status.hls_url,
             trackId: nextId,
             preferProgressive: true,
+            force: true,
             onError: reportEngineError,
           });
         } else if (signal === "complete" && (!status?.queue || status.queue.length === 0)) {
           setError("couldn't advance — queue empty; waiting for refill");
         }
-        const s = await api.feedback(id, signal);
+        const s = await api.feedback(id, signal, targetId);
         setStatus(s);
-        if (signal === "like") {
-          const fb = s.now_playing?.feedback;
-          if (fb === "like" || fb === "dislike") setTrackFeedback(fb);
-          else setTrackFeedback("like");
-        } else if (signal === "dislike") {
-          // Dislike advances off the current track — thumbs reflect the new now-playing.
-          const fb = s.now_playing?.feedback;
-          setTrackFeedback(fb === "like" || fb === "dislike" ? fb : null);
-        }
-        // Server advanced when client had no queue head yet — attach now.
-        if (
-          (signal === "complete" || signal === "dislike") &&
-          !didOptimisticAttach &&
-          s.now_playing?.track_id
-        ) {
+        if (isAdvance && s.now_playing?.track_id) {
+          skipAdvanceRef.current = {
+            fromTrackId: nowId ?? 0,
+            toTrackId: s.now_playing.track_id,
+          };
           const tid = s.now_playing.track_id;
-          const progressiveUrl = s.progressive_url || `/api/v1/tracks/${tid}/stream`;
-          setError(null);
-          setPaused(false);
-          holdWakeLockRef.current = true;
-          void acquireWakeLock();
-          void engineRef.current?.attach({
-            progressiveUrl,
-            hlsUrl: s.hls_url,
-            trackId: tid,
-            preferProgressive: true,
-            onError: reportEngineError,
-          });
+          // Do not abort an already-healthy attach for this track — a second load of
+          // the same Opus stream cancels FFmpeg and surfaces "no supported source".
+          if (!engineRef.current?.isHealthyForTrack(tid)) {
+            const progressiveUrl = s.progressive_url || `/api/v1/tracks/${tid}/stream`;
+            setPaused(false);
+            holdWakeLockRef.current = true;
+            void acquireWakeLock();
+            void engineRef.current?.attach({
+              progressiveUrl,
+              hlsUrl: s.hls_url,
+              trackId: tid,
+              preferProgressive: true,
+              force: true,
+              onError: reportEngineError,
+            });
+          }
+        } else if (isAdvance) {
+          skipAdvanceRef.current = null;
+        }
+        if (targetsNow) {
+          if (signal === "like") {
+            const fb = s.now_playing?.feedback;
+            if (fb === "like" || fb === "dislike") setTrackFeedback(fb);
+            else setTrackFeedback("like");
+          } else if (signal === "dislike") {
+            // Dislike advances off the current track — thumbs reflect the new now-playing.
+            const fb = s.now_playing?.feedback;
+            setTrackFeedback(fb === "like" || fb === "dislike" ? fb : null);
+          } else if (signal === "clear") {
+            const fb = s.now_playing?.feedback;
+            setTrackFeedback(fb === "like" || fb === "dislike" ? fb : null);
+          }
         }
       } catch (e) {
+        skipAdvanceRef.current = null;
         const msg = e instanceof Error ? e.message : "feedback failed";
         setError(
           signal === "complete"
@@ -672,7 +754,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         }
         throw e;
       } finally {
-        if (isSkip || signal === "dislike") setSkipping(false);
+        if ((isSkip || signal === "dislike") && targetsNow) setSkipping(false);
       }
     },
     [status, reportEngineError],
