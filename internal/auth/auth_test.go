@@ -83,14 +83,14 @@ func TestAuthAPIAndBearer(t *testing.T) {
 	rr = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/sessions", bytes.NewBufferString(`{"seed_track_id":1}`))
 	h.ServeHTTP(rr, req)
-	if rr.Code != http.StatusUnauthorized {
-		t.Fatalf("unauth session want 401 got %d", rr.Code)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("unauth session want 403 got %d", rr.Code)
 	}
 
 	rr = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/tracks/1/stream", nil)
 	h.ServeHTTP(rr, req)
-	if rr.Code != http.StatusUnauthorized {
-		t.Fatalf("unauth stream want 401 got %d", rr.Code)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("unauth stream want 403 got %d", rr.Code)
 	}
 }

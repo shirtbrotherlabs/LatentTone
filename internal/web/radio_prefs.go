@@ -19,7 +19,7 @@ func (s *Server) handleMeRadioPrefs(w http.ResponseWriter, r *http.Request) {
 func (s *Server) dispatchMeRadioPrefs(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFrom(r.Context())
 	if u == nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "unauthorized"})
 		return
 	}
 	switch r.Method {

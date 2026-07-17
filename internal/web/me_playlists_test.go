@@ -104,8 +104,8 @@ func TestMePlaylistsCRUDAndIsolation(t *testing.T) {
 	bob := register(t, h, "bob")
 
 	rr := doJSON(t, h, http.MethodPost, "/api/v1/me/playlists", "", `{"name":"Nope"}`)
-	if rr.Code != http.StatusUnauthorized {
-		t.Fatalf("unauth create want 401 got %d", rr.Code)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("unauth create want 403 got %d", rr.Code)
 	}
 
 	rr = doJSON(t, h, http.MethodPost, "/api/v1/me/playlists", alice, `{"name":"Alice Mix"}`)

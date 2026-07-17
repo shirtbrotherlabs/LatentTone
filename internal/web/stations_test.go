@@ -47,8 +47,8 @@ func TestMeStationsAPI(t *testing.T) {
 	token := register(t, h, "stationuser")
 
 	rr := doJSON(t, h, http.MethodGet, "/api/v1/me/stations", "", "")
-	if rr.Code != http.StatusUnauthorized {
-		t.Fatalf("unauth want 401 got %d", rr.Code)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("unauth want 403 got %d", rr.Code)
 	}
 
 	rr = doJSON(t, h, http.MethodGet, "/api/v1/auth/me", token, "")

@@ -14,7 +14,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { ApiError, api } from "../api/client";
+import { api } from "../api/client";
 import type { User } from "../api/types";
 
 type AuthState = {
@@ -45,12 +45,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const me = await api.me();
       setUser(me);
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 401) {
-        setUser(null);
-      } else {
-        setUser(null);
-      }
+    } catch {
+      setUser(null);
     } finally {
       setLoading(false);
     }

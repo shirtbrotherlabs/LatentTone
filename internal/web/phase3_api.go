@@ -89,7 +89,7 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 	}
 	u := auth.UserFrom(r.Context())
 	if u == nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "unauthorized"})
 		return
 	}
 	writeJSON(w, http.StatusOK, userPublic(u))
@@ -107,7 +107,7 @@ func (s *Server) handleAuthPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	u := auth.UserFrom(r.Context())
 	if u == nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "unauthorized"})
 		return
 	}
 	var body passwordBody

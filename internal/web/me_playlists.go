@@ -24,7 +24,7 @@ func (s *Server) handleMePlaylists(w http.ResponseWriter, r *http.Request) {
 func (s *Server) dispatchMePlaylists(w http.ResponseWriter, r *http.Request) {
 	u := auth.UserFrom(r.Context())
 	if u == nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "unauthorized"})
 		return
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/me/playlists")

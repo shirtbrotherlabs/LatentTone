@@ -84,6 +84,19 @@ func TestDisallowUnknownJSONFields(t *testing.T) {
 	}
 }
 
+func TestAuthMeUnauthenticatedIsForbidden(t *testing.T) {
+	h := testHandler(t)
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("unauth me want 403 got %d body %s", rr.Code, rr.Body.String())
+	}
+	if got := rr.Header().Get("WWW-Authenticate"); got != "" {
+		t.Fatalf("WWW-Authenticate should be stripped on API responses, got %q", got)
+	}
+}
+
 func TestCookieAuthWithoutBearer(t *testing.T) {
 	h := testHandler(t)
 	rr := httptest.NewRecorder()

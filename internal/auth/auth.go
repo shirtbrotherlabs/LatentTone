@@ -263,11 +263,13 @@ func (m *Manager) Middleware(next http.Handler) http.Handler {
 	})
 }
 
-// RequireUser returns 401 unless a user is on the context (or open mode).
+// RequireUser returns 403 unless a user is on the context (or open mode).
+// Use 403 (not 401) for missing app sessions so browsers do not treat JSON API
+// responses as HTTP Basic Auth challenges when nginx also protects the origin.
 func RequireUser(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if UserFrom(r.Context()) == nil {
-			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "unauthorized"})
 			return
 		}
 		next(w, r)

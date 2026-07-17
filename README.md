@@ -49,6 +49,8 @@ When `public_base_url` is `https://…`, session cookies are marked **Secure** (
 
 If the reverse proxy also uses **HTTP Basic Auth**, keep `/app/`, `/api/`, `/covers/`, and media under the same authenticated origin (do not split hosts). After the browser unlocks the realm, Basic credentials are reused for `<audio>` and API calls alongside the app’s `lt_session` cookie. See `docs/PLAYER.md` for seek-bar / duration notes behind proxies.
 
+JSON APIs return **403** (not 401) when the app session cookie is missing, and strip `WWW-Authenticate` on `/api/*` responses, so a session probe does not re-open the browser’s HTTP Basic Auth dialog. Wrong username/password on `POST /api/v1/auth/login` still returns 401.
+
 ```bash
 # One-shot catalog scan
 docker compose --profile scan run --rm scan
