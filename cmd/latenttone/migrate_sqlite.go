@@ -31,7 +31,7 @@ import (
 // driver, so it adds no build-time or runtime Go dependency — the app's
 // go.mod stays MariaDB-only per the hard cutover.
 //
-// Usage (see README "Importing an existing SQLite catalog"):
+// Usage (Compose; stop browse first):
 //
 //	latenttone migrate-sqlite --source /data/latenttone.db --config /config/scanner.yaml --yes
 //

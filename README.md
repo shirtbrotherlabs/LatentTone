@@ -87,31 +87,12 @@ latenttone scan  --config /config/scanner.yaml
 latenttone embed --meta /config/metadata.yaml
 latenttone embed --meta /config/metadata.yaml --stop
 latenttone serve --config /config/scanner.yaml --meta /config/metadata.yaml
+# Legacy only (pre-MariaDB installs with data/latenttone.db):
+# docker compose stop browse
+# docker compose run --rm browse migrate-sqlite --source /data/latenttone.db          # dry run
+# docker compose run --rm browse migrate-sqlite --source /data/latenttone.db --yes    # import
+# docker compose start browse
 ```
-
-### Importing an existing SQLite catalog (one-time, pre-MariaDB installs only)
-
-Installs created before the MariaDB migration keep their catalog at `data/latenttone.db`. `latenttone migrate-sqlite` is a one-shot importer that copies it into MariaDB, preserving primary keys so LanceDB vector ids and playlist/session references stay valid. It shells out to the `sqlite3` CLI to read the source file, so it adds **no** SQLite dependency to the app itself — `go.mod` stays MariaDB-only.
-
-```bash
-# Stop browse/embed first to avoid racing writes against the empty target catalog.
-docker compose stop browse
-
-# Dry run (default): counts source rows, writes nothing. Uses the same
-# DATABASE_DSN / scanner.yaml the browse service would (mounted config, same
-# mariadb service on the Compose network).
-docker compose run --rm browse migrate-sqlite --source /data/latenttone.db
-
-# Real import: TRUNCATEs each destination table and re-imports from source.
-# Idempotent — safe to re-run.
-docker compose run --rm browse migrate-sqlite --source /data/latenttone.db --yes
-
-docker compose start browse
-```
-
-A handful of SQLite rows that were distinct under `COLLATE NOCASE` (ASCII case-fold only — e.g. two artists tagged "Live" and "Lïve") can collide under MariaDB's `utf8mb4_unicode_ci` (case- **and** accent-insensitive). The importer detects these, merges the duplicate onto the surviving row, and remaps every reference to it; it also drops (and logs) any row that fails on pre-existing bad source data, such as a value too wide for its column. The final summary reports per-table source/imported counts — investigate before trusting the catalog if any table shows `MISMATCH`.
-
-If there is no `data/latenttone.db` to import (fresh installs), skip this step — `latenttone scan` populates the MariaDB catalog directly.
 
 ### API (auth)
 
