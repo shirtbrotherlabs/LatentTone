@@ -484,6 +484,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     const eng = engineRef.current;
     if (!eng) return;
     const trackId = status.now_playing?.track_id;
+    // Don't remount over an optimistic skip attach that is still buffering.
+    if (trackId && eng.isHealthyForTrack(trackId)) return;
     void eng.attach({
       hlsUrl: status.hls_url,
       progressiveUrl: status.progressive_url,
@@ -689,9 +691,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             hlsUrl: status.hls_url,
             trackId: nextId,
             preferProgressive: true,
-            force: true,
             onError: reportEngineError,
           });
+          // Don't keep the skip button disabled waiting on the feedback round-trip.
+          if (isSkip || signal === "dislike") setSkipping(false);
         } else if (signal === "complete" && (!status?.queue || status.queue.length === 0)) {
           setError("couldn't advance — queue empty; waiting for refill");
         }

@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/shirtbrotherlabs/LatentTone/internal/db"
+	"github.com/shirtbrotherlabs/LatentTone/internal/execprio"
 )
 
 const essentiaDim = 64
@@ -53,7 +54,7 @@ func (e *Essentia) Extract(ctx context.Context, libraryRoot string, track *db.Tr
 	cmd := exec.CommandContext(ctx, bin, args...)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	if err := execprio.Run(cmd); err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -105,20 +106,20 @@ func mapEssentia(doc map[string]any) (map[string]any, []float32) {
 	tuning := asFloat(tonal["tuning_diatonic_strength"])
 
 	features := map[string]any{
-		"bpm":                bpm,
-		"danceability":       dance,
-		"onset_rate":         onset,
-		"average_loudness":   loud,
-		"dynamic_complexity": dyn,
-		"dissonance_mean":    dissonance,
-		"spectral_centroid":  centroid,
+		"bpm":                 bpm,
+		"danceability":        dance,
+		"onset_rate":          onset,
+		"average_loudness":    loud,
+		"dynamic_complexity":  dyn,
+		"dissonance_mean":     dissonance,
+		"spectral_centroid":   centroid,
 		"spectral_complexity": complexity,
-		"zerocrossingrate":   zcr,
-		"key_strength":       keyStrength,
-		"chords_strength":    chordsStrength,
-		"tuning_diatonic":    tuning,
-		"mfcc_mean":          mfccMean,
-		"hpcp_mean_len":      len(hpcpMean),
+		"zerocrossingrate":    zcr,
+		"key_strength":        keyStrength,
+		"chords_strength":     chordsStrength,
+		"tuning_diatonic":     tuning,
+		"mfcc_mean":           mfccMean,
+		"hpcp_mean_len":       len(hpcpMean),
 	}
 
 	vec := make([]float32, essentiaDim)

@@ -366,14 +366,16 @@ export class AudioEngine {
     // credentials apply as a normal media request (duration/metadata available).
     this.audio.removeAttribute("crossorigin");
     const trackId = opts.trackId ?? 0;
-    // Skip confirm often re-calls attach for the same track. Reloading aborts the
-    // in-flight Opus/ffmpeg body and Chrome reports "no supported source was found."
-    if (
-      opts.force &&
-      trackId > 0 &&
-      this.isHealthyForTrack(trackId) &&
-      !this.audio.paused
-    ) {
+    // Keep a healthy in-flight/playing attach for this track. Optimistic skip +
+    // confirm/poll often re-call attach (sometimes with force, or a slightly
+    // different progressive_url). Reloading aborts FFmpeg and doubles cold-start
+    // latency — and Chrome may report "no supported source was found."
+    // force is reserved for error recovery after audio.error (unhealthy).
+    if (trackId > 0 && this.isHealthyForTrack(trackId)) {
+      if (this.audio.paused) {
+        this.applyGain();
+        await this.safePlay(opts.onError, false);
+      }
       return;
     }
     const primary =

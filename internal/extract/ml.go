@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/shirtbrotherlabs/LatentTone/internal/db"
+	"github.com/shirtbrotherlabs/LatentTone/internal/execprio"
 )
 
 const mlBlockDim = 64
@@ -53,7 +54,7 @@ func runMLHelper(ctx context.Context, cfg MLHelperConfig, args ...string) (*Resu
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	if err := execprio.Run(cmd); err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = err.Error()

@@ -339,10 +339,7 @@ func Run(ctx context.Context, cfg *Config, catalog *db.DB, trigger string, progr
 		jobs     = make(chan int64, len(ids))
 		lanceMu  sync.Mutex // serialize LanceDB upserts; acoustic extractors stay parallel across tracks
 	)
-	workers := cfg.Concurrency
-	if workers < 1 {
-		workers = 1
-	}
+	workers := CapEmbedWorkers(cfg.Concurrency)
 	lg.Printf("embed workers=%d sample_mode=%s claimed=%d", workers, cfg.SampleMode, len(ids))
 	for i := 0; i < workers; i++ {
 		wg.Add(1)

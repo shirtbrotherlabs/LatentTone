@@ -5,7 +5,10 @@
 
 package stream
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestIsTranscodeRangeProbe(t *testing.T) {
 	cases := []struct {
@@ -54,6 +57,27 @@ func TestHLSAudioArgsDropsVideo(t *testing.T) {
 		args := HLSAudioArgs(EncodeOpts{Format: format, BitrateKbps: 192})
 		if len(args) == 0 || args[0] != "-vn" {
 			t.Fatalf("format %q missing -vn: %#v", format, args)
+		}
+	}
+}
+
+func TestProgressiveFFmpegArgsLowLatency(t *testing.T) {
+	args, ctype := ProgressiveFFmpegArgs("/music/a.flac", EncodeOpts{Format: "aac", BitrateKbps: 192})
+	if ctype != "audio/aac" {
+		t.Fatalf("ctype=%s", ctype)
+	}
+	joined := strings.Join(args, " ")
+	for _, want := range []string{
+		"-nostdin",
+		"-map 0:a:0",
+		"-vn",
+		"-threads 1",
+		"-flush_packets 1",
+		"-c:a aac",
+		"-f adts",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("missing %q in %#v", want, args)
 		}
 	}
 }

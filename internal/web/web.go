@@ -92,22 +92,10 @@ func New(cfg *config.Config, metaCfg *meta.Config, catalog *db.DB, scanner *scan
 		}
 	}
 	worker := session.NewWorker(catalog, lanceStore, cfg.MaxSessions, cfg.QueuePrefetch)
-	worker.OnAdvance = func(sessionID string, trackID int64) {
-		// Never block session feedback / skip on FFmpeg HLS packaging.
-		go func() {
-			t, err := catalog.GetTrack(trackID)
-			if err != nil || t == nil {
-				return
-			}
-			enc := stream.EncodeOpts{}
-			if row, err := catalog.GetListeningSession(sessionID); err == nil && row != nil {
-				if prefs, err := catalog.GetStreamPrefs(row.UserID); err == nil {
-					enc = stream.EncodeOpts{Format: prefs.StreamFormat, BitrateKbps: prefs.BitrateKbps}
-				}
-			}
-			_ = hls.EnsureHLS(sessionID, t.Path, enc)
-		}()
-	}
+	// Progressive playback is the SPA hot path. Do not eagerly start FFmpeg HLS on
+	// every skip — that piled up encodes under load. serveHLS still EnsureHLS when
+	// a client actually requests the playlist.
+	worker.OnAdvance = nil
 	authMgr := auth.NewManager(catalog, cfg.AuthMode, cfg.SessionTTL, cfg.SecureCookie)
 	s := &Server{
 		Cfg:      cfg,

@@ -47,6 +47,8 @@ type Live struct {
 	TracksSinceBridge int
 	BridgeInterval    int
 	BridgeQueued      bool
+	// refillGen coalesces async queue refills so rapid skips don't stack ANN work.
+	refillGen uint64
 
 	mu sync.Mutex
 }
@@ -234,8 +236,10 @@ func (w *Worker) fillQueue(ctx context.Context, live *Live) error {
 // feedback stay responsive (holding the lock through neighbor search caused
 // gateway 504s and a stuck SPA).
 //
+// Safe to call while holding live.mu — the goroutine acquires the lock itself.
 // replaceSeed > 0 drops auto-prefetch and refills biased to that seed (like).
-// replaceSeed == 0 tops up from now-playing / session seed.
+// replaceSeed == 0 tops up from now-playing / session seed — skipped when the
+// auto queue is still above a watermark so every skip does not start ANN.
 func (w *Worker) scheduleQueueRefill(live *Live, replaceSeed int64) {
 	go func(l *Live, seedOverride int64) {
 		l.mu.Lock()
@@ -243,6 +247,19 @@ func (w *Worker) scheduleQueueRefill(live *Live, replaceSeed int64) {
 			l.mu.Unlock()
 			return
 		}
+		if seedOverride == 0 {
+			_, auto := w.splitQueue(l)
+			minAuto := w.QueuePrefetch / 2
+			if minAuto < 3 {
+				minAuto = 3
+			}
+			if len(auto) >= minAuto {
+				l.mu.Unlock()
+				return
+			}
+		}
+		l.refillGen++
+		gen := l.refillGen
 		if seedOverride > 0 {
 			pins, _ := w.splitQueue(l)
 			l.Queue = append([]int64(nil), pins...)
@@ -256,7 +273,7 @@ func (w *Worker) scheduleQueueRefill(live *Live, replaceSeed int64) {
 
 		l.mu.Lock()
 		defer l.mu.Unlock()
-		if l.Status == db.SessionStatusStopped {
+		if l.Status == db.SessionStatusStopped || gen != l.refillGen {
 			return
 		}
 		_ = w.persist(l, "")
@@ -381,15 +398,23 @@ func (w *Worker) fillQueueFrom(ctx context.Context, live *Live, seedOverride int
 		})
 	}
 
-	// recentArtists / bridgeCandidates need live — briefly lock for reads.
+	// Snapshot diversification inputs under lock; DB work stays unlocked so skip
+	// feedback cannot wedge behind GetTrack storms.
 	live.mu.Lock()
-	recentArtists := w.recentArtists(live)
-	bridgeCands := w.bridgeCandidates(live, exclude, prefs)
-	bridgeDue := prefs.RadioBridge && !live.BridgeQueued && live.TracksSinceBridge >= w.bridgeInterval(live)
-	if bridgeInterval <= 0 {
-		bridgeInterval = live.BridgeInterval
+	recentIDs := append([]int64{}, live.Recent...)
+	if live.NowPlayingID > 0 {
+		recentIDs = append(recentIDs, live.NowPlayingID)
 	}
+	bridgeQueued := live.BridgeQueued
+	if live.BridgeInterval <= 0 {
+		live.BridgeInterval = affinity.BridgeCadenceMin + w.rng().Intn(affinity.BridgeCadenceMax-affinity.BridgeCadenceMin+1)
+	}
+	bridgeInterval = live.BridgeInterval
 	live.mu.Unlock()
+
+	recentArtists := w.artistsForTrackIDs(recentIDs)
+	bridgeCands := w.bridgeCandidates(userID, exclude, prefs)
+	bridgeDue := prefs.RadioBridge && !bridgeQueued && tracksSinceBridge >= bridgeInterval
 
 	res := affinity.SelectDiversified(pool, affinity.SelectOpts{
 		Need:              needMore,
@@ -440,15 +465,6 @@ func (w *Worker) fillQueueFrom(ctx context.Context, live *Live, seedOverride int
 	return nil
 }
 
-func (w *Worker) bridgeInterval(live *Live) int {
-	if live.BridgeInterval > 0 {
-		return live.BridgeInterval
-	}
-	n := affinity.BridgeCadenceMin + w.rng().Intn(affinity.BridgeCadenceMax-affinity.BridgeCadenceMin+1)
-	live.BridgeInterval = n
-	return n
-}
-
 func (w *Worker) queryNeighbors(ctx context.Context, seedTrackID int64, k int, prefs db.RadioPrefs) ([]affinity.Neighbor, error) {
 	if prefs.QueryJitter && w.VectorNeighbors != nil && w.DB != nil {
 		vecRow, err := w.DB.GetTrackVector(seedTrackID)
@@ -470,12 +486,8 @@ func (w *Worker) queryNeighbors(ctx context.Context, seedTrackID int64, k int, p
 	return w.Neighbors(ctx, seedTrackID, k)
 }
 
-func (w *Worker) recentArtists(live *Live) []string {
+func (w *Worker) artistsForTrackIDs(ids []int64) []string {
 	var out []string
-	ids := append([]int64{}, live.Recent...)
-	if live.NowPlayingID > 0 {
-		ids = append(ids, live.NowPlayingID)
-	}
 	for _, id := range ids {
 		t, err := w.DB.GetTrack(id)
 		if err != nil || t == nil {
@@ -486,11 +498,11 @@ func (w *Worker) recentArtists(live *Live) []string {
 	return out
 }
 
-func (w *Worker) bridgeCandidates(live *Live, exclude map[int64]struct{}, prefs db.RadioPrefs) []affinity.Candidate {
+func (w *Worker) bridgeCandidates(userID int64, exclude map[int64]struct{}, prefs db.RadioPrefs) []affinity.Candidate {
 	if !prefs.RadioBridge {
 		return nil
 	}
-	hits, err := w.DB.ListHighAffinityTracks(live.UserID, 40)
+	hits, err := w.DB.ListHighAffinityTracks(userID, 40)
 	if err != nil || len(hits) == 0 {
 		return nil
 	}
@@ -601,34 +613,55 @@ func (w *Worker) advanceLocked(ctx context.Context, live *Live) error {
 	}
 	live.NowPlayingID = next
 	live.Status = db.SessionStatusPlaying
-	w.onTrackStarted(live, next, src)
+	userID := live.UserID
+	sid := live.ID
+
+	// DB lookups for diversification must not run under live.mu — that blocked
+	// skip feedback for seconds while refill/GetTrack ran.
+	live.mu.Unlock()
+	prefs, _ := w.DB.GetRadioPrefs(userID)
+	artist := ""
+	if t, err := w.DB.GetTrack(next); err == nil && t != nil {
+		artist = t.ArtistName
+	}
+	live.mu.Lock()
+	if live.Status == db.SessionStatusStopped {
+		return fmt.Errorf("session stopped")
+	}
+	if live.NowPlayingID != next {
+		return nil
+	}
+	w.applyTrackStarted(live, next, src, artist, prefs)
 	// Commit now_playing immediately so skip feedback can return without waiting
 	// on ANN refill or FFmpeg HLS packaging.
 	if err := w.persist(live, ""); err != nil {
 		return err
 	}
-	userID := live.UserID
-	sid, tid := live.ID, next
 	if w.OnAdvance != nil {
-		go w.OnAdvance(sid, tid)
+		go w.OnAdvance(sid, next)
 	}
 	w.scheduleQueueRefill(live, 0)
 	// Playback history insert outside the hot path callers still hold live.mu.
 	go func() {
-		_, _ = w.DB.InsertPlaybackEvent(userID, tid, sid)
+		_, _ = w.DB.InsertPlaybackEvent(userID, next, sid)
 	}()
 	return nil
 }
 
 // onTrackStarted updates artist-penalty + Radio Bridge cadence after a track becomes now_playing.
+// Safe to call without live.mu (Create path); fetches prefs/artist then applies under lock if needed.
 func (w *Worker) onTrackStarted(live *Live, trackID int64, source string) {
-	w.ensurePinned(live)
 	prefs, _ := w.DB.GetRadioPrefs(live.UserID)
-	t, err := w.DB.GetTrack(trackID)
 	artist := ""
-	if err == nil && t != nil {
+	if t, err := w.DB.GetTrack(trackID); err == nil && t != nil {
 		artist = t.ArtistName
 	}
+	w.applyTrackStarted(live, trackID, source, artist, prefs)
+}
+
+// applyTrackStarted mutates diversification state. Caller must hold live.mu (or own live exclusively).
+func (w *Worker) applyTrackStarted(live *Live, trackID int64, source, artist string, prefs db.RadioPrefs) {
+	w.ensurePinned(live)
 	if prefs.ArtistPenalty && artist != "" {
 		live.ArtistPenalties = affinity.OnArtistPlayed(
 			live.ArtistPenalties, artist, affinity.DefaultPenaltyBoost, affinity.DefaultPenaltyDecay,
@@ -786,14 +819,30 @@ func (w *Worker) Back(ctx context.Context, live *Live) error {
 	}
 	live.NowPlayingID = prev
 	live.Status = db.SessionStatusPlaying
-	w.onTrackStarted(live, prev, "")
+	userID := live.UserID
+	sid := live.ID
+	live.mu.Unlock()
+	prefs, _ := w.DB.GetRadioPrefs(userID)
+	artist := ""
+	if t, err := w.DB.GetTrack(prev); err == nil && t != nil {
+		artist = t.ArtistName
+	}
+	live.mu.Lock()
+	if live.Status == db.SessionStatusStopped {
+		return fmt.Errorf("session stopped")
+	}
+	if live.NowPlayingID != prev {
+		return nil
+	}
+	w.applyTrackStarted(live, prev, "", artist, prefs)
 	if err := w.persist(live, ""); err != nil {
 		return err
 	}
-	_, _ = w.DB.InsertPlaybackEvent(live.UserID, prev, live.ID)
+	go func() {
+		_, _ = w.DB.InsertPlaybackEvent(userID, prev, sid)
+	}()
 	if w.OnAdvance != nil {
-		sid, tid := live.ID, prev
-		go w.OnAdvance(sid, tid)
+		go w.OnAdvance(sid, prev)
 	}
 	w.scheduleQueueRefill(live, 0)
 	_ = ctx

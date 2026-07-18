@@ -8,6 +8,7 @@ package meta
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -32,8 +33,8 @@ type Config struct {
 	LanceDBPath     string            `yaml:"lancedb_path"`
 	LanceDBTable    string            `yaml:"lancedb_table"`
 	LanceHelperPath string            `yaml:"lance_helper_path"`
-	EssentiaBinary   string            `yaml:"essentia_binary"`
-	EssentiaProfile  string            `yaml:"essentia_profile"`
+	EssentiaBinary  string            `yaml:"essentia_binary"`
+	EssentiaProfile string            `yaml:"essentia_profile"`
 	MLHelperPath    string            `yaml:"ml_helper_path"`
 	YAMNetModel     string            `yaml:"yamnet_model"`
 	YAMNetClassMap  string            `yaml:"yamnet_class_map"`
@@ -143,6 +144,31 @@ func (c *Config) Clone() *Config {
 	return &out
 }
 
+// CapEmbedWorkers clamps requested embed parallelism so a few CPUs stay free
+// for on-demand FFmpeg playback. Without this, Essentia/YAMNet can saturate
+// the host and push AAC/Opus time-to-first-byte into multi-second territory.
+func CapEmbedWorkers(want int) int {
+	if want < 1 {
+		want = 1
+	}
+	n := runtime.NumCPU()
+	reserve := 2
+	switch {
+	case n <= 2:
+		reserve = 0
+	case n <= 4:
+		reserve = 1
+	}
+	max := n - reserve
+	if max < 1 {
+		max = 1
+	}
+	if want > max {
+		return max
+	}
+	return want
+}
+
 // ForWebStart returns config for the browse UI identity scan: all pending tracks,
 // with parallel Essentia workers (at least 4, or configured concurrency if higher).
 func (c *Config) ForWebStart() *Config {
@@ -156,7 +182,8 @@ func (c *Config) ForWebStart() *Config {
 		}
 	}
 	if ml {
-		// ML extractors are heavier; keep web concurrency modest to avoid host OOM.
+		// ML extractors are heavier; keep web concurrency modest to avoid host OOM
+		// and leave headroom for progressive FFmpeg under load.
 		if out.Concurrency < 1 {
 			out.Concurrency = 1
 		}
@@ -166,6 +193,7 @@ func (c *Config) ForWebStart() *Config {
 	} else if out.Concurrency < 4 {
 		out.Concurrency = 4
 	}
+	out.Concurrency = CapEmbedWorkers(out.Concurrency)
 	return out
 }
 

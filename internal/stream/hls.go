@@ -92,12 +92,16 @@ func (m *Manager) EnsureHLS(sessionID, relTrackPath string, opts ...EncodeOpts) 
 	playlist := filepath.Join(dir, "index.m3u8")
 	segPattern := filepath.Join(dir, "seg%03d.ts")
 	args := []string{
-		"-hide_banner", "-loglevel", "error",
+		"-hide_banner", "-loglevel", "error", "-nostdin",
+		"-analyzeduration", "500000",
+		"-probesize", "32768",
 		"-y",
 		"-i", abs,
+		"-map", "0:a:0",
 	}
 	args = append(args, HLSAudioArgs(enc)...)
 	args = append(args,
+		"-threads", "1",
 		"-f", "hls",
 		"-hls_time", "4",
 		"-hls_list_size", "0",

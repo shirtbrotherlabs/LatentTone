@@ -14,6 +14,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/shirtbrotherlabs/LatentTone/internal/execprio"
 )
 
 // Store is a thin client around scripts/lance_helper.py.
@@ -59,7 +61,7 @@ func (s *Store) Upsert(ctx context.Context, trackID int64, vec []float32) (strin
 	cmd.Stdin = bytes.NewReader(append(row, '\n'))
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	if err := execprio.Run(cmd); err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = err.Error()
@@ -95,7 +97,7 @@ func (s *Store) Search(ctx context.Context, vec []float32, k int, excludeTrackID
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	if err := execprio.Run(cmd); err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = err.Error()
@@ -149,7 +151,7 @@ func (s *Store) Dump(ctx context.Context, limit, offset, preview int) (*DumpResu
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	if err := execprio.Run(cmd); err != nil {
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = err.Error()

@@ -208,6 +208,26 @@ func IsTranscodeRangeProbe(rangeHeader string) bool {
 	return true
 }
 
+// ProgressiveFFmpegArgs builds FFmpeg argv for a low-latency progressive encode.
+// Tuned for fast time-to-first-byte: small probe, single audio map, one thread,
+// flush packets immediately (skip responsiveness under load).
+func ProgressiveFFmpegArgs(absPath string, opts EncodeOpts) (args []string, contentType string) {
+	codec, format, ctype, bitrate := ResolveEncodeTarget(opts)
+	return []string{
+		"-hide_banner", "-loglevel", "error", "-nostdin",
+		"-analyzeduration", "500000",
+		"-probesize", "32768",
+		"-i", absPath,
+		"-map", "0:a:0",
+		"-vn",
+		"-c:a", codec, "-b:a", bitrate,
+		"-threads", "1",
+		"-flush_packets", "1",
+		"-f", format,
+		"pipe:1",
+	}, ctype
+}
+
 // ServeProgressiveTranscode pipes FFmpeg stdout to the HTTP response.
 // ctx should be the request context — on cancel (skip / navigation) FFmpeg is
 // killed so orphaned encodes cannot pile up and starve the server.
@@ -226,15 +246,8 @@ func (m *Manager) ServeProgressiveTranscode(ctx context.Context, w http.Response
 			return ctx.Err()
 		}
 	}
-	codec, format, ctype, bitrate := ResolveEncodeTarget(opts)
-	cmd := exec.Command(m.FFmpegPath,
-		"-hide_banner", "-loglevel", "error",
-		"-i", absPath,
-		"-vn",
-		"-c:a", codec, "-b:a", bitrate,
-		"-f", format,
-		"pipe:1",
-	)
+	ffArgs, ctype := ProgressiveFFmpegArgs(absPath, opts)
+	cmd := exec.Command(m.FFmpegPath, ffArgs...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("ffmpeg stdout: %w", err)
