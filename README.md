@@ -32,6 +32,33 @@ docker compose up --build -d browse
 
 Compose brings up a `mariadb` service (catalog / users / vectors status) alongside `browse`, and waits for its healthcheck before starting. Covers, HLS segments, and the LanceDB vector index stay on the `${DATA_DIR:-./data}` filesystem volume.
 
+### Released images (GHCR)
+
+Pre-built images are published to GitHub Container Registry on each SemVer tag:
+
+| Tag | Meaning |
+|-----|---------|
+| `ghcr.io/shirtbrotherlabs/latenttone:vX.Y.Z-beta.N` | Specific beta build |
+| `ghcr.io/shirtbrotherlabs/latenttone:beta` | Latest beta (floating) |
+| `ghcr.io/shirtbrotherlabs/latenttone:vX.Y.Z` | Stable release (no `latest` until a stable cut) |
+
+Current first public beta: **`v0.4.0-beta.1`** (`linux/amd64`).
+
+```bash
+# Pull a released image (package must be public, or docker login ghcr.io first)
+docker pull ghcr.io/shirtbrotherlabs/latenttone:v0.4.0-beta.1
+
+# Run Compose against the released image instead of a local build:
+# in docker-compose.yml under browse:, set
+#   image: ghcr.io/shirtbrotherlabs/latenttone:v0.4.0-beta.1
+# and omit (or comment) build: .
+cp .env.example .env
+# set MUSIC_LIBRARY, MARIADB_PASSWORD, MARIADB_ROOT_PASSWORD, PUBLIC_BASE_URL
+docker compose up -d browse
+```
+
+Floating tag `beta` tracks the newest beta; pin the SemVer tag in production-like deploys.
+
 The `browse` container runs `serve` under an in-container watchdog (`scripts/serve-watchdog.sh`): every 60s it probes `GET /api/v1/config` with a 30s curl timeout and restarts the server if the probe fails (90s grace after start/restart). Compose `restart: unless-stopped` still applies if the whole container exits.
 
 **Product client:** <http://localhost:8080/> (redirects to `/app/`)  
