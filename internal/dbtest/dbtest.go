@@ -66,7 +66,9 @@ func Open(t testing.TB) (*db.DB, string) {
 	}
 	if err := adminDB.Ping(); err != nil {
 		_ = adminDB.Close()
-		t.Fatalf("dbtest: MariaDB not reachable at %s (set TEST_DATABASE_DSN, or run `docker compose up -d mariadb`): %v",
+		// Skip (do not fail) when MariaDB is absent — CI's fast job has no DB
+		// service; local/integration runs set TEST_DATABASE_DSN or Compose mariadb.
+		t.Skipf("dbtest: MariaDB not reachable at %s (set TEST_DATABASE_DSN, or run `docker compose up -d mariadb`): %v",
 			adminCfg.Addr, err)
 	}
 

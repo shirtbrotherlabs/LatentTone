@@ -6,7 +6,7 @@ on:
       - "v*"
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 env:
@@ -48,3 +48,35 @@ jobs:
           platforms: linux/amd64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          body: |
+            ## LatentTone ${{ github.ref_name }}
+
+            First public beta of the Phase 4 product stack (SPA listen/player, MariaDB catalog, stream prefs).
+
+            ### Image
+            ```
+            docker pull ghcr.io/shirtbrotherlabs/latenttone:${{ github.ref_name }}
+            # floating alias for betas:
+            docker pull ghcr.io/shirtbrotherlabs/latenttone:beta
+            ```
+            Platform: `linux/amd64` only for this cut. Package may be private until you set GHCR visibility to Public.
+
+            ### Highlights
+            - Product SPA at `/app/` (auth, listen, floating player, catalog, playlists)
+            - MariaDB catalog + progressive/HLS streaming
+            - Stream prefs: original / mp3 / aac / opus
+            - Queue skip / play-next; nginx Basic Auth proxy notes (403 + strip WWW-Authenticate on `/api/*`)
+            - Embed helpers run at nice 15 with capped workers so playback can preempt identity scans
+
+            ### Known gaps
+            - amd64-only image (no multi-arch yet)
+            - Identity embed can still saturate the host when the API is idle (nice/cap help; no auto-pause while listening)
+            - `latest` is not published for beta/rc tags
