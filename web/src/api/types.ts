@@ -132,6 +132,14 @@ export type ScanStatus = {
   stoppable: boolean;
 };
 
+export type ScanSchedule = {
+  enabled: boolean;
+  interval_seconds: number;
+  updated_at?: string;
+  next_run_at?: string;
+  source?: string;
+};
+
 export type EmbedScannerRow = {
   name: string;
   label?: string;

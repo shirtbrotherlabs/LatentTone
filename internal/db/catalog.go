@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Author: martinsah
 // Date: 2026-07-15
+// Last-Modified: 2026-07-18
 
 package db
 
@@ -65,6 +66,27 @@ WHERE path = ? AND file_mtime = ? AND file_size = ? AND missing_at IS NULL`,
 		value := int(year.Int64)
 		in.Year = &value
 		in.AlbumYear = &value
+	}
+	return true, nil
+}
+
+// TrackUnchanged reports whether path exists with matching mtime+size and is not missing.
+// Used by incremental scans and the filesystem watcher to skip tag extract/upsert.
+func (d *DB) TrackUnchanged(path string, mtime, size int64) (bool, error) {
+	if d == nil || d.SQL == nil || path == "" {
+		return false, nil
+	}
+	var id int64
+	err := d.SQL.QueryRow(`
+SELECT id FROM tracks
+WHERE path = ? AND file_mtime = ? AND file_size = ? AND missing_at IS NULL`,
+		path, mtime, size,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
 	}
 	return true, nil
 }
@@ -459,6 +481,61 @@ WHERE id = ?`,
 		Now(), seen, upserted, missing, status, NullString(errMsg), id,
 	)
 	return err
+}
+
+// ScanRunSummary is the latest (or current) library scan run for the UI.
+type ScanRunSummary struct {
+	ID        int64
+	Trigger   string
+	StartedAt string
+	Finished  string // empty while running
+	Seen      int
+	Upserted  int
+	Missing   int
+	Status    string
+	Error     string
+}
+
+// LatestScanRun returns the most recent scan_runs row, if any.
+func (d *DB) LatestScanRun() (*ScanRunSummary, error) {
+	if d == nil || d.SQL == nil {
+		return nil, nil
+	}
+	row := d.SQL.QueryRow(
+		"SELECT id, started_at, COALESCE(finished_at,''), `trigger`, " +
+			"COALESCE(files_seen,0), COALESCE(files_upserted,0), COALESCE(files_missing,0), " +
+			"status, COALESCE(error_message,'') " +
+			"FROM scan_runs ORDER BY id DESC LIMIT 1",
+	)
+	var s ScanRunSummary
+	err := row.Scan(
+		&s.ID, &s.StartedAt, &s.Finished, &s.Trigger,
+		&s.Seen, &s.Upserted, &s.Missing, &s.Status, &s.Error,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+// FormatScanRunLast builds the Settings "Last:" line from a scan_runs row.
+func FormatScanRunLast(s *ScanRunSummary) string {
+	if s == nil {
+		return ""
+	}
+	when := s.Finished
+	if when == "" {
+		when = s.StartedAt
+	}
+	msg := fmt.Sprintf("%s trigger=%s seen=%d upserted=%d missing=%d status=%s",
+		when, s.Trigger, s.Seen, s.Upserted, s.Missing, s.Status)
+	if s.Error != "" {
+		msg += " error=" + s.Error
+	}
+	return msg
 }
 
 // Artist is a browse row.

@@ -30,7 +30,7 @@ type Essentia struct {
 
 func (e *Essentia) Name() string { return "essentia" }
 
-func (e *Essentia) Extract(ctx context.Context, libraryRoot string, track *db.TrackEmbedBrief) (*Result, error) {
+func (e *Essentia) Extract(ctx context.Context, libraryRoot string, track *db.TrackEmbedBrief, _ *SharedAudio) (*Result, error) {
 	bin := e.Binary
 	if bin == "" {
 		bin = "essentia_streaming_extractor_music"

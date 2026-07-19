@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Author: martinsah
 // Date: 2026-07-15
+// Last-Modified: 2026-07-18
 
 package extract
 
@@ -100,7 +101,7 @@ type YAMNet struct {
 
 func (y *YAMNet) Name() string { return "yamnet" }
 
-func (y *YAMNet) Extract(ctx context.Context, libraryRoot string, track *db.TrackEmbedBrief) (*Result, error) {
+func (y *YAMNet) Extract(ctx context.Context, libraryRoot string, track *db.TrackEmbedBrief, shared *SharedAudio) (*Result, error) {
 	audio := AbsPath(libraryRoot, track.Path)
 	model := y.Model
 	if model == "" {
@@ -110,7 +111,11 @@ func (y *YAMNet) Extract(ctx context.Context, libraryRoot string, track *db.Trac
 	if cmap == "" {
 		cmap = "/models/yamnet/yamnet_class_map.csv"
 	}
-	res, err := runMLHelper(ctx, y.Helper, "yamnet", audio, model, cmap)
+	args := []string{"yamnet", audio, model, cmap}
+	if shared != nil && shared.Path != "" {
+		args = append(args, "--raw-f32le", shared.Path)
+	}
+	res, err := runMLHelper(ctx, y.Helper, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +137,7 @@ type MusiCNN struct {
 
 func (m *MusiCNN) Name() string { return "musicnn" }
 
-func (m *MusiCNN) Extract(ctx context.Context, libraryRoot string, track *db.TrackEmbedBrief) (*Result, error) {
+func (m *MusiCNN) Extract(ctx context.Context, libraryRoot string, track *db.TrackEmbedBrief, shared *SharedAudio) (*Result, error) {
 	audio := AbsPath(libraryRoot, track.Path)
 	model := m.Model
 	if model == "" {
@@ -142,7 +147,11 @@ func (m *MusiCNN) Extract(ctx context.Context, libraryRoot string, track *db.Tra
 	if meta == "" {
 		meta = "/models/musicnn/msd-musicnn-1.json"
 	}
-	res, err := runMLHelper(ctx, m.Helper, "musicnn", audio, model, meta)
+	args := []string{"musicnn", audio, model, meta}
+	if shared != nil && shared.Path != "" {
+		args = append(args, "--raw-f32le", shared.Path)
+	}
+	res, err := runMLHelper(ctx, m.Helper, args...)
 	if err != nil {
 		return nil, err
 	}

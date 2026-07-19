@@ -22,7 +22,7 @@ type Catalog struct {
 
 func (c *Catalog) Name() string { return "catalog" }
 
-func (c *Catalog) Extract(_ context.Context, _ string, track *db.TrackEmbedBrief) (*Result, error) {
+func (c *Catalog) Extract(_ context.Context, _ string, track *db.TrackEmbedBrief, _ *SharedAudio) (*Result, error) {
 	const dim = 32
 	vec := make([]float32, dim)
 	features := map[string]any{

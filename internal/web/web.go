@@ -67,7 +67,6 @@ type Server struct {
 	tmpl *template.Template
 
 	scanMu   sync.Mutex
-	scanning bool
 	lastScan string
 }
 
@@ -146,6 +145,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/embed/status", auth.RequireUser(s.handleEmbedStatus))
 	mux.HandleFunc("/api/scan/status", auth.RequireUser(s.handleAPIScanStatus))
 	mux.HandleFunc("/api/scan/start", auth.RequireAdmin(s.handleAPIScanStart))
+	mux.HandleFunc("/api/scan/schedule", s.handleAPIScanSchedule)
 	mux.HandleFunc("/api/embed/start", auth.RequireAdmin(s.handleAPIEmbedStart))
 	mux.HandleFunc("/api/embed/stop", auth.RequireAdmin(s.handleAPIEmbedStop))
 	mux.HandleFunc("/api/embed/status", auth.RequireUser(s.handleEmbedStatus))
@@ -232,10 +232,16 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	scanning := s.Scanner != nil && s.Scanner.Running()
 	s.scanMu.Lock()
-	scanning := s.scanning
 	last := s.lastScan
 	s.scanMu.Unlock()
+	if run, err := s.DB.LatestScanRun(); err == nil && run != nil {
+		last = db.FormatScanRunLast(run)
+		if run.Status == "running" {
+			scanning = true
+		}
+	}
 	artists, albums, tracks, _ := s.DB.Counts()
 	ready, pending, processing, _, _, _, _ := s.DB.VectorStatusCounts()
 	scanners := s.scannerStatus(tracks)
@@ -776,7 +782,7 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
-	if err := s.startScanJob(); err != nil {
+	if err := s.startScanJob(false); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}

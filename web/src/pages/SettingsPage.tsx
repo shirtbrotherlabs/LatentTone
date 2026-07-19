@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
-import type { EmbedStatus, RadioPrefs, ScanStatus, StreamPrefs } from "../api/types";
+import type { EmbedStatus, RadioPrefs, ScanSchedule, ScanStatus, StreamPrefs } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { usePlayer } from "../player/PlayerContext";
 
@@ -56,6 +56,8 @@ export function SettingsPage() {
   const { status, stop } = usePlayer();
   const isAdmin = !!user?.is_admin;
   const [scan, setScan] = useState<ScanStatus | null>(null);
+  const [schedule, setSchedule] = useState<ScanSchedule | null>(null);
+  const [scheduleHours, setScheduleHours] = useState("24");
   const [embed, setEmbed] = useState<EmbedStatus | null>(null);
   const [radio, setRadio] = useState<RadioPrefs | null>(null);
   const [stream, setStream] = useState<StreamPrefs | null>(null);
@@ -64,6 +66,7 @@ export function SettingsPage() {
   const [passwordMsg, setPasswordMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState<
     | "scan"
+    | "schedule"
     | "embed-start"
     | "embed-stop"
     | "radio"
@@ -76,12 +79,17 @@ export function SettingsPage() {
 
   const refresh = useCallback(async () => {
     try {
-      const [scanStatus, embedStatus] = await Promise.all([
+      const [scanStatus, embedStatus, sched] = await Promise.all([
         api.scanStatus(),
         api.embedStatus(),
+        api.getScanSchedule(),
       ]);
       setScan(scanStatus);
       setEmbed(embedStatus);
+      setSchedule(sched);
+      if (sched?.interval_seconds) {
+        setScheduleHours(String(Math.max(1, Math.round(sched.interval_seconds / 3600))));
+      }
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "status failed");
@@ -126,14 +134,30 @@ export function SettingsPage() {
     void loadStream();
   }, [loadStream]);
 
-  const startScan = async () => {
+  const startScan = async (force = false) => {
     setBusy("scan");
     setError(null);
     try {
-      await api.scanStart();
+      await api.scanStart(force);
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : "scan start failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const saveSchedule = async (patch: { enabled?: boolean; interval_seconds?: number }) => {
+    setBusy("schedule");
+    setError(null);
+    try {
+      const next = await api.patchScanSchedule(patch);
+      setSchedule(next);
+      if (next.interval_seconds) {
+        setScheduleHours(String(Math.max(1, Math.round(next.interval_seconds / 3600))));
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "schedule update failed");
     } finally {
       setBusy(null);
     }
@@ -430,22 +454,80 @@ export function SettingsPage() {
           <p className="muted">
             Catalog / metadata reconcile over the mounted library.
             {scan?.running ? " · running" : " · idle"}
+            {!scan?.running && scan?.last?.includes("upserted=0")
+              ? " · unchanged files are skipped (use Force rescan to re-read tags)"
+              : ""}
           </p>
           {scan?.last ? <p className="muted">Last: {scan.last}</p> : null}
+          {schedule ? (
+            <p className="muted">
+              Schedule:{" "}
+              {schedule.enabled
+                ? `every ${Math.max(1, Math.round(schedule.interval_seconds / 3600))}h`
+                : "disabled"}
+              {schedule.next_run_at ? ` · next ${schedule.next_run_at}` : ""}
+            </p>
+          ) : null}
           {isAdmin ? (
-            <div className="toolbar" style={{ marginTop: "0.75rem" }}>
-              <button
-                type="button"
-                className="btn"
-                disabled={!!busy || !!scan?.running}
-                onClick={() => void startScan()}
-              >
-                {busy === "scan" || scan?.running ? "Scanning…" : "Start scan"}
-              </button>
-            </div>
+            <>
+              <div className="toolbar" style={{ marginTop: "0.75rem" }}>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={!!busy || !!scan?.running}
+                  onClick={() => void startScan(false)}
+                >
+                  {busy === "scan" || scan?.running ? "Scanning…" : "Start scan"}
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={!!busy || !!scan?.running}
+                  onClick={() => void startScan(true)}
+                  title="Re-read tags even when file mtime/size unchanged"
+                >
+                  Force rescan
+                </button>
+              </div>
+              <div className="toolbar" style={{ marginTop: "0.75rem", flexWrap: "wrap", gap: "0.5rem" }}>
+                <label className="muted" style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                  <input
+                    type="checkbox"
+                    checked={!!schedule?.enabled}
+                    disabled={!!busy || !schedule}
+                    onChange={(e) => void saveSchedule({ enabled: e.target.checked })}
+                  />
+                  Periodic scan
+                </label>
+                <label className="muted" style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                  Every
+                  <input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={scheduleHours}
+                    disabled={!!busy || !schedule?.enabled}
+                    style={{ width: "4rem" }}
+                    onChange={(e) => setScheduleHours(e.target.value)}
+                  />
+                  hours
+                </label>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={!!busy || !schedule?.enabled}
+                  onClick={() => {
+                    const h = Math.max(1, Math.round(Number(scheduleHours) || 24));
+                    void saveSchedule({ interval_seconds: h * 3600 });
+                  }}
+                >
+                  {busy === "schedule" ? "Saving…" : "Save interval"}
+                </button>
+              </div>
+            </>
           ) : (
             <p className="muted" style={{ marginTop: "0.75rem" }}>
-              Status only — an admin must start library scans.
+              Status only — an admin must start or schedule library scans.
             </p>
           )}
         </div>
