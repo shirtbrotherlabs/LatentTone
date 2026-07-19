@@ -65,6 +65,7 @@ func TestOpenAPIYAMLSkeleton(t *testing.T) {
 		"/api/v1/config",
 		"/api/scan/status",
 		"/api/scan/start",
+		"/api/scan/schedule",
 		"/api/embed/start",
 		"/api/embed/stop",
 		"/api/embed/status",

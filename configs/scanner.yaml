@@ -42,8 +42,10 @@ cover_names:
 # falls back to it automatically. Paths mirror the album's library-relative dir.
 cover_cache_dir: /data/covers
 
-# Periodic full reconcile interval (0 disables periodic scans when serving)
-scan_interval: 1h
+# Bootstrap for scan_schedule on first serve (DB row wins after seed).
+# 24h product default; set 0s to seed schedule disabled (e.g. CI / stream-smoke).
+# Admins change the live schedule in Settings → Library scan (PATCH /api/scan/schedule).
+scan_interval: 24h
 
 # HTTP listen address for browse UI
 listen_addr: ":8080"

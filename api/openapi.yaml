@@ -1056,11 +1056,18 @@ paths:
       summary: Start catalog library scan
       description: |
         Starts a full library reconcile (tags → MariaDB catalog). **Admin only.**
+        Unchanged files (matching path+mtime+size) are skipped unless `force=1`.
         Returns 409 if a scan is already running. There is no stop API.
       operationId: scanStart
       security:
         - bearerAuth: []
         - cookieAuth: []
+      parameters:
+        - name: force
+          in: query
+          schema:
+            type: boolean
+          description: Re-extract tags even when file mtime/size match the catalog.
       responses:
         '200':
           description: Scan started
@@ -1073,6 +1080,61 @@ paths:
         '403':
           $ref: '#/components/responses/Error'
         '409':
+          $ref: '#/components/responses/Error'
+
+  /api/scan/schedule:
+    get:
+      tags: [scan]
+      summary: Get library scan schedule
+      description: |
+        Global periodic scan schedule (enabled + interval). Authenticated users may read;
+        only admins may change it. Defaults to enabled every 24h on first seed.
+      operationId: scanScheduleGet
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScanSchedule'
+        '401':
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [scan]
+      summary: Update library scan schedule
+      description: Admin-only. Persists to MariaDB; takes effect on the next serve ticker cycle.
+      operationId: scanSchedulePatch
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled:
+                  type: boolean
+                interval_seconds:
+                  type: integer
+                  minimum: 60
+                  description: Default 86400 (24h).
+      responses:
+        '200':
+          description: Updated schedule
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScanSchedule'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
           $ref: '#/components/responses/Error'
 
   /api/embed/start:
@@ -1612,6 +1674,24 @@ components:
           type: boolean
           description: Always false — catalog scan has no cancel API.
       required: [running, artists, albums, tracks, stoppable]
+
+    ScanSchedule:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        interval_seconds:
+          type: integer
+          minimum: 60
+        updated_at:
+          type: string
+        next_run_at:
+          type: string
+          description: RFC3339 UTC hint for the next periodic run when enabled.
+        source:
+          type: string
+          description: db | default
+      required: [enabled, interval_seconds]
 
     EmbedStatus:
       type: object

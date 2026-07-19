@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Author: martinsah
 // Date: 2026-07-15
+// Last-Modified: 2026-07-18
 
 package meta
 
@@ -11,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -169,6 +171,41 @@ func (c *Controller) addExtractorDone(name string, ok bool) {
 	} else {
 		c.extractorErr[name]++
 	}
+}
+
+// StartIfIncomplete starts a full pending-track embed (ForWebStart) when the
+// catalog still has vector work and no embed is already running. Safe to call
+// after a library scan (startup / periodic / API).
+func StartIfIncomplete(parent context.Context, ctrl *Controller, cfg *Config, catalog *db.DB, trigger string) {
+	if ctrl == nil || cfg == nil || catalog == nil {
+		return
+	}
+	if ctrl.Running() {
+		return
+	}
+	extractorSet := cfg.ExtractorSetString()
+	modelJSON, _ := json.Marshal(cfg.ModelVersions)
+	if _, err := catalog.EnsureVectorRows(extractorSet, string(modelJSON)); err != nil {
+		log.Printf("post-scan embed ensure rows: %v", err)
+		return
+	}
+	ready, pending, processing, _, stale, catalogTracks, err := catalog.VectorStatusCounts()
+	if err != nil {
+		log.Printf("post-scan embed status: %v", err)
+		return
+	}
+	incomplete := pending > 0 || processing > 0 || stale > 0 || (catalogTracks > 0 && ready < catalogTracks)
+	if !incomplete {
+		log.Printf("post-scan embed skipped: catalog complete (ready=%d catalog=%d)", ready, catalogTracks)
+		return
+	}
+	runCfg := cfg.ForWebStart()
+	if err := ctrl.Start(parent, runCfg, catalog, trigger); err != nil {
+		log.Printf("post-scan embed: %v", err)
+		return
+	}
+	log.Printf("post-scan embed started trigger=%s ready=%d pending=%d catalog=%d",
+		trigger, ready, pending, catalogTracks)
 }
 
 // Start launches Run in a goroutine if idle.
@@ -397,13 +434,38 @@ func processTrack(ctx context.Context, cfg *Config, catalog *db.DB, store *lance
 	if brief == nil {
 		return fmt.Errorf("track %d not found", trackID)
 	}
+
+	// Decode once for YAMNet+MusiCNN when both are enabled (same mono/16k/45s PCM).
+	var shared *extract.SharedAudio
+	if extract.NeedsSharedDecode(cfg.Extractors) {
+		abs := extract.AbsPath(cfg.LibraryRoot, brief.Path)
+		ffmpeg := "ffmpeg"
+		// Prefer scanner-style path when set on host; meta config has no ffmpeg field.
+		if v := strings.TrimSpace(os.Getenv("FFMPEG_PATH")); v != "" {
+			ffmpeg = v
+		}
+		sa, decErr := extract.DecodeSharedAudio(ctx, ffmpeg, abs)
+		if decErr != nil {
+			// Fall back to per-extractor decode rather than failing the whole track.
+			log.Printf("shared decode track %d: %v (falling back)", trackID, decErr)
+		} else {
+			shared = sa
+			defer shared.Cleanup()
+			n := int64(0)
+			if fi, stErr := os.Stat(sa.Path); stErr == nil {
+				n = fi.Size()
+			}
+			log.Printf("shared decode track %d: ok bytes=%d", trackID, n)
+		}
+	}
+
 	var compiled []float32
 	for _, ex := range active {
 		if err := ctx.Err(); err != nil {
 			_ = catalog.ReleaseProcessingToPending(trackID)
 			return err
 		}
-		res, err := ex.Extract(ctx, cfg.LibraryRoot, brief)
+		res, err := ex.Extract(ctx, cfg.LibraryRoot, brief, shared)
 		if err != nil {
 			if progress != nil {
 				progress.addExtractorDone(ex.Name(), false)

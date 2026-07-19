@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Author: martinsah
 // Date: 2026-07-15
+// Last-Modified: 2026-07-18
 
 package extract
 
@@ -25,9 +26,11 @@ type Result struct {
 }
 
 // Extractor produces features + a float vector slice for one track.
+// shared may be nil; PCM-consuming extractors (yamnet/musicnn) use it when set
+// to avoid re-decoding the library file.
 type Extractor interface {
 	Name() string
-	Extract(ctx context.Context, libraryRoot string, track *db.TrackEmbedBrief) (*Result, error)
+	Extract(ctx context.Context, libraryRoot string, track *db.TrackEmbedBrief, shared *SharedAudio) (*Result, error)
 }
 
 // Registry maps names to extractors.
@@ -74,7 +77,7 @@ type Stub struct {
 }
 
 func (s *Stub) Name() string { return s.ExtractorName }
-func (s *Stub) Extract(context.Context, string, *db.TrackEmbedBrief) (*Result, error) {
+func (s *Stub) Extract(context.Context, string, *db.TrackEmbedBrief, *SharedAudio) (*Result, error) {
 	return nil, fmt.Errorf("extractor %q not implemented in this build (see ADR-002)", s.ExtractorName)
 }
 

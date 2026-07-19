@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Author: martinsah
 // Date: 2026-07-15
+// Last-Modified: 2026-07-18
 
 package scan
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -20,23 +22,53 @@ import (
 	"github.com/shirtbrotherlabs/LatentTone/internal/tags"
 )
 
+// ErrAlreadyRunning is returned when a Full scan is already in progress.
+var ErrAlreadyRunning = errors.New("scan already running")
+
 // Scanner walks the music library and updates the catalog.
 type Scanner struct {
 	Cfg *config.Config
 	DB  *db.DB
 	Log *log.Logger
+
+	running atomic.Bool
+}
+
+// Options controls a Full library reconcile.
+type Options struct {
+	// Force re-extracts and upserts every file even when mtime+size match.
+	Force bool
 }
 
 // Result summarizes a scan run.
 type Result struct {
 	Seen     int
 	Upserted int
+	Skipped  int // unchanged path+mtime+size (incremental)
 	Missing  int64
 	Errors   int
 }
 
-// Full performs a full library reconcile.
+// Running reports whether a Full scan is in progress.
+func (s *Scanner) Running() bool {
+	return s != nil && s.running.Load()
+}
+
+// Full performs a full library reconcile (incremental by default).
 func (s *Scanner) Full(trigger string) (*Result, error) {
+	return s.FullOpts(trigger, Options{})
+}
+
+// FullOpts performs a library reconcile with options (e.g. Force).
+func (s *Scanner) FullOpts(trigger string, opts Options) (*Result, error) {
+	if s == nil {
+		return nil, fmt.Errorf("scanner is nil")
+	}
+	if !s.running.CompareAndSwap(false, true) {
+		return nil, ErrAlreadyRunning
+	}
+	defer s.running.Store(false)
+
 	if s.Log == nil {
 		s.Log = log.Default()
 	}
@@ -48,6 +80,18 @@ func (s *Scanner) Full(trigger string) (*Result, error) {
 	exts := s.Cfg.ExtSet()
 	root := s.Cfg.LibraryRoot
 
+	known := map[string]db.TrackFileInfo{}
+	if !opts.Force {
+		files, listErr := s.DB.ListTrackFiles()
+		if listErr != nil {
+			_ = s.DB.FinishScanRun(runID, 0, 0, 0, "error", listErr.Error())
+			return nil, listErr
+		}
+		for _, f := range files {
+			known[f.Path] = f
+		}
+	}
+
 	type job struct {
 		abs, rel string
 	}
@@ -58,6 +102,7 @@ func (s *Scanner) Full(trigger string) (*Result, error) {
 		seenMu   sync.Mutex
 		seen     = map[string]struct{}{}
 		upserted atomic.Int64
+		skipped  atomic.Int64
 		errCount atomic.Int64
 		wg       sync.WaitGroup
 		writerWG sync.WaitGroup
@@ -165,6 +210,25 @@ func (s *Scanner) Full(trigger string) (*Result, error) {
 		if excluded(rel, s.Cfg.Exclude) {
 			return nil
 		}
+
+		if !opts.Force {
+			info, infoErr := d.Info()
+			if infoErr != nil {
+				s.Log.Printf("stat %s: %v", rel, infoErr)
+				errCount.Add(1)
+				return nil
+			}
+			mtime := info.ModTime().Unix()
+			size := info.Size()
+			if prev, ok := known[rel]; ok && !prev.Missing && prev.FileMtime == mtime && prev.FileSize == size {
+				seenMu.Lock()
+				seen[rel] = struct{}{}
+				seenMu.Unlock()
+				skipped.Add(1)
+				return nil
+			}
+		}
+
 		jobs <- job{abs: path, rel: rel}
 		return nil
 	})
@@ -191,17 +255,20 @@ func (s *Scanner) Full(trigger string) (*Result, error) {
 	res := &Result{
 		Seen:     len(seen),
 		Upserted: int(upserted.Load()),
+		Skipped:  int(skipped.Load()),
 		Missing:  missing,
 		Errors:   int(errCount.Load()),
 	}
 	if err := s.DB.FinishScanRun(runID, res.Seen, res.Upserted, int(res.Missing), status, ""); err != nil {
 		return res, err
 	}
-	s.Log.Printf("scan complete: seen=%d upserted=%d missing=%d errors=%d", res.Seen, res.Upserted, res.Missing, res.Errors)
+	s.Log.Printf("scan complete: seen=%d upserted=%d skipped=%d missing=%d errors=%d force=%v",
+		res.Seen, res.Upserted, res.Skipped, res.Missing, res.Errors, opts.Force)
 	return res, nil
 }
 
 // ScanPath updates a single relative or absolute audio path.
+// Unchanged path+mtime+size rows are skipped (no force option on the watcher path).
 func (s *Scanner) ScanPath(absPath string) error {
 	root := s.Cfg.LibraryRoot
 	absPath = filepath.Clean(absPath)
@@ -212,6 +279,17 @@ func (s *Scanner) ScanPath(absPath string) error {
 	rel = filepath.ToSlash(rel)
 	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(absPath)), ".")
 	if _, ok := s.Cfg.ExtSet()[ext]; !ok {
+		return nil
+	}
+	fi, err := os.Stat(absPath)
+	if err != nil {
+		return err
+	}
+	unchanged, err := s.DB.TrackUnchanged(rel, fi.ModTime().Unix(), fi.Size())
+	if err != nil {
+		return err
+	}
+	if unchanged {
 		return nil
 	}
 	in, err := tags.Extract(absPath, rel)

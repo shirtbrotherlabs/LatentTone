@@ -3,12 +3,16 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Author: martinsah
 # Date: 2026-07-15
+# Last-Modified: 2026-07-18
 """
 YAMNet / MusiCNN embedding helper for LatentTone.
 Commands:
-  yamnet  <audio_path> [model_path] [class_map_csv]
-  musicnn <audio_path> [onnx_path] [metadata_json]
+  yamnet  <audio_path> [model_path] [class_map_csv] [--raw-f32le <pcm_path>]
+  musicnn <audio_path> [onnx_path] [metadata_json] [--raw-f32le <pcm_path>]
 Stdout JSON: {"features": {...}, "vector": [64 floats L2-normalized]}
+
+When --raw-f32le is set, load mono float32 LE PCM at 16 kHz from that path
+(shared decode from the Go embed job) instead of re-running ffmpeg on audio_path.
 """
 from __future__ import annotations
 
@@ -30,8 +34,26 @@ def die(msg: str, code: int = 1) -> None:
     raise SystemExit(code)
 
 
-def load_mono_16k(path: str) -> Any:
+def load_raw_f32le(path: str) -> Any:
     import numpy as np
+
+    try:
+        wav = np.fromfile(path, dtype=np.float32)
+    except OSError as e:
+        die(f"raw pcm read failed: {e}")
+    if wav.size == 0:
+        die("raw pcm empty")
+    max_samples = int(MAX_SECONDS * SR)
+    if wav.size > max_samples:
+        wav = wav[:max_samples]
+    return wav
+
+
+def load_mono_16k(path: str, raw_f32le: str | None = None) -> Any:
+    import numpy as np
+
+    if raw_f32le:
+        return load_raw_f32le(raw_f32le)
 
     # Decode via ffmpeg (available on Essentia runtime image / Compose stack).
     cmd = [
@@ -50,6 +72,13 @@ def load_mono_16k(path: str) -> Any:
     if wav.size == 0:
         die("decoded audio empty")
     return wav
+
+
+def pop_raw_f32le(argv: list[str]) -> tuple[list[str], str | None]:
+    """Strip trailing --raw-f32le <path> from argv; return (rest, path|None)."""
+    if len(argv) >= 2 and argv[-2] == "--raw-f32le":
+        return argv[:-2], argv[-1]
+    return argv, None
 
 
 def l2_normalize(v: Any) -> Any:
@@ -88,11 +117,11 @@ def emit(features: dict[str, Any], native_vec: Any) -> None:
 
 # ---- YAMNet (TFLite) ---------------------------------------------------------
 
-def run_yamnet(audio_path: str, model_path: str, class_map: str) -> None:
+def run_yamnet(audio_path: str, model_path: str, class_map: str, raw_f32le: str | None = None) -> None:
     import numpy as np
     from tflite_runtime.interpreter import Interpreter
 
-    wav = load_mono_16k(audio_path)
+    wav = load_mono_16k(audio_path, raw_f32le=raw_f32le)
     # YAMNet patch is ~0.975s; ensure minimum length
     min_len = int(0.975 * SR)
     if wav.size < min_len:
@@ -251,11 +280,13 @@ def musicnn_patches(wav: Any, patch_frames: int = 187, hop: int = 256) -> Any:
     return np.stack(patches, axis=0).astype(np.float32)  # [P, 187, 96]
 
 
-def run_musicnn(audio_path: str, onnx_path: str, meta_json: str) -> None:
+def run_musicnn(
+    audio_path: str, onnx_path: str, meta_json: str, raw_f32le: str | None = None
+) -> None:
     import numpy as np
     import onnxruntime as ort
 
-    wav = load_mono_16k(audio_path)
+    wav = load_mono_16k(audio_path, raw_f32le=raw_f32le)
     patches = musicnn_patches(wav)
     sess = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
     in_name = sess.get_inputs()[0].name
@@ -303,28 +334,31 @@ def run_musicnn(audio_path: str, onnx_path: str, meta_json: str) -> None:
 
 
 def main() -> None:
-    if len(sys.argv) < 3:
-        die("usage: ml_embed_helper.py yamnet|musicnn <audio> [model] [extra]")
-    cmd = sys.argv[1]
-    audio = sys.argv[2]
-    if not os.path.isfile(audio):
+    argv, raw_pcm = pop_raw_f32le(sys.argv[1:])
+    if len(argv) < 2:
+        die("usage: ml_embed_helper.py yamnet|musicnn <audio> [model] [extra] [--raw-f32le pcm]")
+    cmd = argv[0]
+    audio = argv[1]
+    if not os.path.isfile(audio) and not raw_pcm:
         die(f"audio not found: {audio}")
+    if raw_pcm and not os.path.isfile(raw_pcm):
+        die(f"raw pcm not found: {raw_pcm}")
     if cmd == "yamnet":
-        model = sys.argv[3] if len(sys.argv) > 3 else os.environ.get(
+        model = argv[2] if len(argv) > 2 else os.environ.get(
             "YAMNET_MODEL", "/models/yamnet/yamnet.tflite"
         )
-        cmap = sys.argv[4] if len(sys.argv) > 4 else os.environ.get(
+        cmap = argv[3] if len(argv) > 3 else os.environ.get(
             "YAMNET_CLASS_MAP", "/models/yamnet/yamnet_class_map.csv"
         )
-        run_yamnet(audio, model, cmap)
+        run_yamnet(audio, model, cmap, raw_f32le=raw_pcm)
     elif cmd == "musicnn":
-        model = sys.argv[3] if len(sys.argv) > 3 else os.environ.get(
+        model = argv[2] if len(argv) > 2 else os.environ.get(
             "MUSICNN_MODEL", "/models/musicnn/msd-musicnn-1.onnx"
         )
-        meta = sys.argv[4] if len(sys.argv) > 4 else os.environ.get(
+        meta = argv[3] if len(argv) > 3 else os.environ.get(
             "MUSICNN_META", "/models/musicnn/msd-musicnn-1.json"
         )
-        run_musicnn(audio, model, meta)
+        run_musicnn(audio, model, meta, raw_f32le=raw_pcm)
     else:
         die(f"unknown command {cmd}")
 

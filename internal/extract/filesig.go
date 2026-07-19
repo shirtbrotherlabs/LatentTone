@@ -22,7 +22,7 @@ type FileSig struct {
 
 func (f *FileSig) Name() string { return "filesig" }
 
-func (f *FileSig) Extract(ctx context.Context, libraryRoot string, track *db.TrackEmbedBrief) (*Result, error) {
+func (f *FileSig) Extract(ctx context.Context, libraryRoot string, track *db.TrackEmbedBrief, _ *SharedAudio) (*Result, error) {
 	const dim = 32
 	path := AbsPath(libraryRoot, track.Path)
 	file, err := os.Open(path)

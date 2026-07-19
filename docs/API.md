@@ -35,7 +35,10 @@ On `serve` startup, if that username is missing it is created with `is_admin=1`.
 |------------|-------|-----------|
 | Register / listen / playlists / radio prefs | yes | yes |
 | View library + acoustic scan status | yes | yes |
-| Start/stop library scan or acoustic embed | yes | no (403) |
+| Start library scan / force rescan / edit scan schedule | yes | no (403) |
+| Start/stop acoustic embed | yes | no (403) |
+
+Library scan schedule: `GET|PATCH /api/scan/schedule` (default enabled, `interval_seconds=86400`). Startup scan is on by default; disable with `LATENTTONE_SCAN_ON_START=0`.
 
 `GET /api/v1/auth/me` includes `is_admin`.
 

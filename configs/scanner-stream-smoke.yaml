@@ -27,6 +27,7 @@ cover_names:
   - cover.png
   - folder.jpg
 
+# Seed scan_schedule disabled; also disable startup scan via Compose env.
 scan_interval: 0s
 listen_addr: ":8080"
 

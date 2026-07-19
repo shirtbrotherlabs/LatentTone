@@ -16,6 +16,7 @@ import type {
   PublicConfig,
   RadioPrefs,
   RadioPrefsPatch,
+  ScanSchedule,
   ScanStatus,
   SessionStatus,
   Station,
@@ -159,9 +160,19 @@ export const api = {
   scanStatus() {
     return request<ScanStatus>("/api/scan/status");
   },
-  scanStart() {
-    return request<{ ok: boolean; running: boolean; stoppable: boolean }>("/api/scan/start", {
+  scanStart(force = false) {
+    const q = force ? "?force=1" : "";
+    return request<{ ok: boolean; running: boolean; stoppable: boolean }>(`/api/scan/start${q}`, {
       method: "POST",
+    });
+  },
+  getScanSchedule() {
+    return request<ScanSchedule>("/api/scan/schedule");
+  },
+  patchScanSchedule(body: { enabled?: boolean; interval_seconds?: number }) {
+    return request<ScanSchedule>("/api/scan/schedule", {
+      method: "PATCH",
+      body: JSON.stringify(body),
     });
   },
   embedStatus() {

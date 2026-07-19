@@ -2,6 +2,8 @@
 
 Self-hosted music server that turns your local library into a continuous, seed-based radio — pick a track, and LatentTone keeps the stream going with likes, skips, and affinity-guided up-next.
 
+![LatentTone Now Playing — radio queue with floating player](docs/images/now-playing.jpg)
+
 ## Current status
 
 **Public beta (`v0.4.0-beta.1`)** — ready to run from a published Docker image.
@@ -103,7 +105,11 @@ docker compose up -d
 
 Wait until `browse` is healthy (`docker compose ps`).
 
-### 3. Scan your library (one-shot)
+### 3. Library scan
+
+On each `browse` / `serve` start, LatentTone begins a library scan automatically (async; does not block HTTP readiness). When that scan finishes, an **acoustic identity** embed starts if any tracks still need vectors. Subsequent library scans skip unchanged files (same path + mtime + size). Periodic library scans default to every **24 hours** (then also kick embed if incomplete); an admin can change that under **Settings → Library scan**, or disable startup library scans with `LATENTTONE_SCAN_ON_START=0` / `--scan-on-start=false`.
+
+Manual one-shot (optional; use `--force` to re-read tags for unchanged files):
 
 ```bash
 docker compose run --rm --entrypoint latenttone browse \
