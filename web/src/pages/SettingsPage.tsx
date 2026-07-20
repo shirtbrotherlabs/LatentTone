@@ -3,13 +3,48 @@
  * SPDX-License-Identifier: GPL-3.0-only
  * Author: martinsah
  * Date: 2026-07-16
+ * Last-Modified: 2026-07-20
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { EmbedStatus, RadioPrefs, ScanSchedule, ScanStatus, StreamPrefs } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { usePlayer } from "../player/PlayerContext";
+
+type ReadySample = { t: number; ready: number };
+
+/** Human duration for ETA copy (e.g. "about 2h 15m"). */
+function formatEta(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "";
+  if (seconds < 45) return "less than a minute";
+  if (seconds < 3600) {
+    const m = Math.max(1, Math.round(seconds / 60));
+    return m === 1 ? "about 1 minute" : `about ${m} minutes`;
+  }
+  const h = Math.floor(seconds / 3600);
+  const m = Math.round((seconds % 3600) / 60);
+  if (m <= 0) return h === 1 ? "about 1 hour" : `about ${h} hours`;
+  if (h >= 10) return `about ${h} hours`;
+  return `about ${h}h ${m}m`;
+}
+
+function estimateIdentityEta(
+  samples: ReadySample[],
+  remaining: number,
+  running: boolean,
+): string | null {
+  if (!running || remaining <= 0) return null;
+  if (samples.length < 2) return "estimating…";
+  const first = samples[0];
+  const last = samples[samples.length - 1];
+  const dt = (last.t - first.t) / 1000;
+  const dr = last.ready - first.ready;
+  if (dt < 4 || dr < 1) return "estimating…";
+  const rate = dr / dt; // tracks ready per second
+  if (rate <= 0) return "estimating…";
+  return formatEta(remaining / rate);
+}
 
 type RadioToggleKey = keyof Pick<
   RadioPrefs,
@@ -76,6 +111,8 @@ export function SettingsPage() {
     | null
   >(null);
   const [error, setError] = useState<string | null>(null);
+  const [identityEta, setIdentityEta] = useState<string | null>(null);
+  const readySamples = useRef<ReadySample[]>([]);
 
   const refresh = useCallback(async () => {
     try {
@@ -89,6 +126,18 @@ export function SettingsPage() {
       setSchedule(sched);
       if (sched?.interval_seconds) {
         setScheduleHours(String(Math.max(1, Math.round(sched.interval_seconds / 3600))));
+      }
+      if (embedStatus?.running) {
+        const next = [
+          ...readySamples.current,
+          { t: Date.now(), ready: embedStatus.ready },
+        ].slice(-12);
+        readySamples.current = next;
+        const left = Math.max(0, embedStatus.pending + embedStatus.processing);
+        setIdentityEta(estimateIdentityEta(next, left, true));
+      } else {
+        readySamples.current = [];
+        setIdentityEta(null);
       }
       setError(null);
     } catch (e) {
@@ -246,8 +295,11 @@ export function SettingsPage() {
   const artists = scan?.artists ?? 0;
   const albums = scan?.albums ?? 0;
   const tracks = scan?.tracks ?? embed?.catalog_tracks ?? 0;
-  const embedPct =
-    embed && embed.claimed > 0 ? Math.min(100, Math.round((100 * embed.done) / embed.claimed)) : 0;
+  const identityReady = embed?.ready ?? 0;
+  const identityTotal = Math.max(tracks, embed?.catalog_tracks ?? 0, identityReady);
+  const identityLeft = Math.max(0, (embed?.pending ?? 0) + (embed?.processing ?? 0));
+  const identityPct =
+    identityTotal > 0 ? Math.min(100, Math.round((100 * identityReady) / identityTotal)) : 0;
 
   return (
     <section>
@@ -415,38 +467,54 @@ export function SettingsPage() {
         </div>
 
         <div className="tile">
-          <h3>Library stats</h3>
-          <div className="stat-row">
-            <div>
-              <strong>{artists.toLocaleString()}</strong>
-              <span className="muted"> artists</span>
-            </div>
-            <div>
-              <strong>{albums.toLocaleString()}</strong>
-              <span className="muted"> albums</span>
-            </div>
-            <div>
-              <strong>{tracks.toLocaleString()}</strong>
-              <span className="muted"> tracks</span>
-            </div>
-          </div>
+          <h3>Library</h3>
+          <p className="library-summary">
+            <strong>{tracks.toLocaleString()}</strong> tracks
+            <span className="muted">
+              {" "}
+              · {artists.toLocaleString()} artists · {albums.toLocaleString()} albums
+            </span>
+          </p>
           {embed ? (
+            <div className="identity-summary">
+              <div className="identity-summary-head">
+                <span>Acoustic identity</span>
+                <span className="muted">{identityPct}%</span>
+              </div>
+              <div
+                className="identity-bar"
+                role="progressbar"
+                aria-valuenow={identityPct}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-label="Acoustic identity progress"
+              >
+                <div className="identity-bar-fill" style={{ width: `${identityPct}%` }} />
+              </div>
+              <p className="muted identity-summary-detail">
+                {identityReady.toLocaleString()} of {identityTotal.toLocaleString()} tracks ready
+                {identityLeft > 0 ? ` · ${identityLeft.toLocaleString()} left` : ""}
+              </p>
+              {embed.running ? (
+                <p className="identity-eta">
+                  Scanning now
+                  {identityEta && identityEta !== "estimating…"
+                    ? ` — ${identityEta} left`
+                    : identityEta
+                      ? ` — ${identityEta}`
+                      : ""}
+                </p>
+              ) : identityLeft > 0 ? (
+                <p className="muted identity-eta">Not finished — start an acoustic scan to continue.</p>
+              ) : identityTotal > 0 ? (
+                <p className="identity-eta identity-eta-done">Complete</p>
+              ) : null}
+            </div>
+          ) : (
             <p className="muted" style={{ marginTop: "0.75rem" }}>
-              Acoustic identity ready: {embed.ready.toLocaleString()} · pending{" "}
-              {embed.pending.toLocaleString()} · processing {embed.processing.toLocaleString()}
+              Loading library status…
             </p>
-          ) : null}
-          {embed?.scanners?.length ? (
-            <ul className="scanner-list">
-              {embed.scanners.map((row) => (
-                <li key={row.name}>
-                  {row.label || row.name}: {row.ready?.toLocaleString() ?? 0}/
-                  {row.total?.toLocaleString() ?? tracks.toLocaleString()} ({row.pct ?? 0}%)
-                  {row.enabled === false ? " · disabled" : ""}
-                </li>
-              ))}
-            </ul>
-          ) : null}
+          )}
         </div>
 
         <div className="tile">
@@ -535,12 +603,16 @@ export function SettingsPage() {
         <div className="tile">
           <h3>Scan acoustic identity</h3>
           <p className="muted">
-            Embeddings / acoustic profile job
+            Build the listening fingerprint for each track
             {embed?.running
-              ? ` · running ${embedPct}% (${embed.done}/${embed.claimed})`
-              : " · idle"}
+              ? identityEta && identityEta !== "estimating…"
+                ? ` · in progress, ${identityEta} left`
+                : " · in progress"
+              : identityLeft > 0
+                ? ` · ${identityLeft.toLocaleString()} tracks still need a scan`
+                : " · idle"}
           </p>
-          {embed?.last ? <p className="muted">Last: {embed.last}</p> : null}
+          {embed?.last && !embed.running ? <p className="muted">Last: {embed.last}</p> : null}
           {isAdmin ? (
             <div className="toolbar" style={{ marginTop: "0.75rem" }}>
               <button

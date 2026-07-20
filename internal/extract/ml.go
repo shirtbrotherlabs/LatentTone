@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Author: martinsah
 // Date: 2026-07-15
-// Last-Modified: 2026-07-18
+// Last-Modified: 2026-07-20
 
 package extract
 
@@ -25,6 +25,8 @@ const mlBlockDim = 64
 type MLHelperConfig struct {
 	Python     string
 	HelperPath string
+	// Pool, when set, uses warm serve workers instead of one-shot processes.
+	Pool *MLPool
 }
 
 func (c MLHelperConfig) pythonBin() string {
@@ -66,29 +68,22 @@ func runMLHelper(ctx context.Context, cfg MLHelperConfig, args ...string) (*Resu
 	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
 		return nil, fmt.Errorf("ml helper parse: %w", err)
 	}
-	if len(out.Vector) == 0 {
-		return nil, fmt.Errorf("ml helper returned empty vector")
+	return mlResultFromVector(out.Features, out.Vector)
+}
+
+func runML(ctx context.Context, cfg MLHelperConfig, cmd, audio, model, extra string, shared *SharedAudio) (*Result, error) {
+	raw := ""
+	if shared != nil {
+		raw = shared.Path
 	}
-	vec := make([]float32, len(out.Vector))
-	for i, x := range out.Vector {
-		vec[i] = float32(x)
+	if cfg.Pool != nil {
+		return cfg.Pool.Call(ctx, cmd, audio, model, extra, raw)
 	}
-	if len(vec) != mlBlockDim {
-		fixed := make([]float32, mlBlockDim)
-		n := len(vec)
-		if n > mlBlockDim {
-			n = mlBlockDim
-		}
-		copy(fixed, vec[:n])
-		L2Normalize(fixed)
-		vec = fixed
-	} else {
-		L2Normalize(vec)
+	args := []string{cmd, audio, model, extra}
+	if raw != "" {
+		args = append(args, "--raw-f32le", raw)
 	}
-	if out.Features == nil {
-		out.Features = map[string]any{}
-	}
-	return &Result{Features: out.Features, Vector: vec}, nil
+	return runMLHelper(ctx, cfg, args...)
 }
 
 // YAMNet runs TFLite YAMNet via ml_embed_helper.py.
@@ -111,11 +106,7 @@ func (y *YAMNet) Extract(ctx context.Context, libraryRoot string, track *db.Trac
 	if cmap == "" {
 		cmap = "/models/yamnet/yamnet_class_map.csv"
 	}
-	args := []string{"yamnet", audio, model, cmap}
-	if shared != nil && shared.Path != "" {
-		args = append(args, "--raw-f32le", shared.Path)
-	}
-	res, err := runMLHelper(ctx, y.Helper, args...)
+	res, err := runML(ctx, y.Helper, "yamnet", audio, model, cmap, shared)
 	if err != nil {
 		return nil, err
 	}
@@ -147,11 +138,7 @@ func (m *MusiCNN) Extract(ctx context.Context, libraryRoot string, track *db.Tra
 	if meta == "" {
 		meta = "/models/musicnn/msd-musicnn-1.json"
 	}
-	args := []string{"musicnn", audio, model, meta}
-	if shared != nil && shared.Path != "" {
-		args = append(args, "--raw-f32le", shared.Path)
-	}
-	res, err := runMLHelper(ctx, m.Helper, args...)
+	res, err := runML(ctx, m.Helper, "musicnn", audio, model, meta, shared)
 	if err != nil {
 		return nil, err
 	}

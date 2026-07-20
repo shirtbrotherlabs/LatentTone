@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Author: martinsah
 // Date: 2026-07-15
-// Last-Modified: 2026-07-18
+// Last-Modified: 2026-07-20
 
 package meta
 
@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/shirtbrotherlabs/LatentTone/internal/db"
 	"github.com/shirtbrotherlabs/LatentTone/internal/extract"
@@ -315,7 +316,30 @@ func Run(ctx context.Context, cfg *Config, catalog *db.DB, trigger string, progr
 			ex.Profile = cfg.EssentiaProfile
 		}
 	}
+	needsML := false
+	for _, name := range cfg.Extractors {
+		if name == "yamnet" || name == "musicnn" {
+			needsML = true
+			break
+		}
+	}
+	workers := CapEmbedWorkers(cfg.Concurrency)
 	helper := extract.MLHelperConfig{HelperPath: cfg.MLHelperPath}
+	var mlPool *extract.MLPool
+	if needsML {
+		poolSize := workers
+		if poolSize < 1 {
+			poolSize = 1
+		}
+		p, err := extract.StartMLPool(helper, poolSize)
+		if err != nil {
+			return nil, fmt.Errorf("start ml pool: %w", err)
+		}
+		mlPool = p
+		helper.Pool = mlPool
+		defer func() { _ = mlPool.Close() }()
+		lg.Printf("embed ml pool workers=%d (warm yamnet/musicnn)", poolSize)
+	}
 	if ex, ok := reg["yamnet"].(*extract.YAMNet); ok {
 		ex.Helper = helper
 		if cfg.YAMNetModel != "" {
@@ -347,6 +371,16 @@ func Run(ctx context.Context, cfg *Config, catalog *db.DB, trigger string, progr
 		Table:      cfg.LanceDBTable,
 		HelperPath: cfg.LanceHelperPath,
 	}
+	var lanceWriter *lance.Writer
+	if store.Enabled() {
+		w, err := store.StartWriter(cfg.BatchSize)
+		if err != nil {
+			return nil, fmt.Errorf("start lance writer: %w", err)
+		}
+		lanceWriter = w
+		defer func() { _ = lanceWriter.Close() }()
+		lg.Printf("embed lance writer batch_size=%d (warm connection)", cfg.BatchSize)
+	}
 
 	runID, err := catalog.BeginEmbedRun(trigger, cfg.SampleMode, cfg.MaxTracks)
 	if err != nil {
@@ -354,30 +388,52 @@ func Run(ctx context.Context, cfg *Config, catalog *db.DB, trigger string, progr
 	}
 	_ = writeJobControl(cfg.JobControlPath, "running")
 
-	limit := cfg.MaxTracks
+	// Claim in small waves so track_vectors.processing reflects in-flight work
+	// (claiming the whole library at once made the UI look stuck at ~N processing).
+	claimBatch := workers * 2
+	if claimBatch < 8 {
+		claimBatch = 8
+	}
+	if cfg.SampleMode != "all" && cfg.MaxTracks > 0 && cfg.MaxTracks < claimBatch {
+		claimBatch = cfg.MaxTracks
+	}
+	maxClaim := cfg.MaxTracks
 	if cfg.SampleMode == "all" {
-		limit = 1_000_000
+		maxClaim = 0 // unlimited
 	}
 
-	ids, err := catalog.ClaimVectorWork(limit, cfg.SampleMode, cfg.SampleSeed)
-	if err != nil {
-		_ = catalog.FinishEmbedRun(runID, 0, 0, 0, "error", err.Error())
-		return nil, err
-	}
 	if progress != nil {
 		progress.setEnabledExtractors(cfg.Extractors)
-		progress.setClaimed(len(ids))
 	}
 
 	var (
-		okCount  atomic.Int64
-		errCount atomic.Int64
-		wg       sync.WaitGroup
-		jobs     = make(chan int64, len(ids))
-		lanceMu  sync.Mutex // serialize LanceDB upserts; acoustic extractors stay parallel across tracks
+		okCount      atomic.Int64
+		errCount     atomic.Int64
+		totalClaimed atomic.Int64
+		wg           sync.WaitGroup
+		jobs         = make(chan int64, claimBatch)
 	)
-	workers := CapEmbedWorkers(cfg.Concurrency)
-	lg.Printf("embed workers=%d sample_mode=%s claimed=%d", workers, cfg.SampleMode, len(ids))
+	lg.Printf("embed workers=%d sample_mode=%s claim_batch=%d", workers, cfg.SampleMode, claimBatch)
+
+	// Periodic flush so Upsert waiters on a partial batch do not deadlock workers.
+	flushStop := make(chan struct{})
+	if lanceWriter != nil {
+		go func() {
+			t := time.NewTicker(400 * time.Millisecond)
+			defer t.Stop()
+			for {
+				select {
+				case <-flushStop:
+					return
+				case <-t.C:
+					if err := lanceWriter.Flush(ctx); err != nil && ctx.Err() == nil {
+						lg.Printf("embed lance flush: %v", err)
+					}
+				}
+			}
+		}()
+	}
+
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
@@ -387,7 +443,7 @@ func Run(ctx context.Context, cfg *Config, catalog *db.DB, trigger string, progr
 					_ = catalog.ReleaseProcessingToPending(trackID)
 					continue
 				}
-				if err := processTrack(ctx, cfg, catalog, store, &lanceMu, progress, active, extractorSet, modelVersions, trackID); err != nil {
+				if err := processTrack(ctx, cfg, catalog, store, lanceWriter, progress, active, extractorSet, modelVersions, trackID); err != nil {
 					lg.Printf("embed track %d: %v", trackID, err)
 					errCount.Add(1)
 					_ = catalog.MarkVectorError(trackID, err.Error())
@@ -404,29 +460,73 @@ func Run(ctx context.Context, cfg *Config, catalog *db.DB, trigger string, progr
 		}()
 	}
 
-	for _, id := range ids {
+	// Feeder: claim the next wave only as workers drain the channel.
+feed:
+	for {
 		if ctx.Err() != nil || stopRequested(cfg.JobControlPath) {
-			_ = catalog.ReleaseProcessingToPending(id)
-			continue
+			break
 		}
-		jobs <- id
+		nClaim := claimBatch
+		if maxClaim > 0 {
+			left := maxClaim - int(totalClaimed.Load())
+			if left <= 0 {
+				break
+			}
+			if left < nClaim {
+				nClaim = left
+			}
+		}
+		ids, err := catalog.ClaimVectorWork(nClaim, cfg.SampleMode, cfg.SampleSeed)
+		if err != nil {
+			lg.Printf("embed claim: %v", err)
+			break
+		}
+		if len(ids) == 0 {
+			break
+		}
+		totalClaimed.Add(int64(len(ids)))
+		if progress != nil {
+			progress.setClaimed(int(totalClaimed.Load()))
+		}
+		for i, id := range ids {
+			select {
+			case <-ctx.Done():
+				for _, rest := range ids[i:] {
+					_ = catalog.ReleaseProcessingToPending(rest)
+				}
+				break feed
+			case jobs <- id:
+			}
+			if stopRequested(cfg.JobControlPath) {
+				for _, rest := range ids[i+1:] {
+					_ = catalog.ReleaseProcessingToPending(rest)
+				}
+				break feed
+			}
+		}
 	}
 	close(jobs)
 	wg.Wait()
+	close(flushStop)
+	if lanceWriter != nil {
+		if err := lanceWriter.Flush(context.Background()); err != nil {
+			lg.Printf("embed lance final flush: %v", err)
+		}
+	}
 
 	status := "ok"
 	if ctx.Err() != nil || stopRequested(cfg.JobControlPath) {
 		status = "stopped"
 		_, _ = catalog.ResetStuckProcessing()
 	}
-	res := &Result{Claimed: len(ids), OK: int(okCount.Load()), Errors: int(errCount.Load())}
+	res := &Result{Claimed: int(totalClaimed.Load()), OK: int(okCount.Load()), Errors: int(errCount.Load())}
 	_ = catalog.FinishEmbedRun(runID, res.Claimed, res.OK, res.Errors, status, "")
 	clearJobControl(cfg.JobControlPath)
 	lg.Printf("embed %s: claimed=%d ok=%d errors=%d", status, res.Claimed, res.OK, res.Errors)
 	return res, nil
 }
 
-func processTrack(ctx context.Context, cfg *Config, catalog *db.DB, store *lance.Store, lanceMu *sync.Mutex, progress *Controller, active []extract.Extractor, extractorSet, modelVersions string, trackID int64) error {
+func processTrack(ctx context.Context, cfg *Config, catalog *db.DB, store *lance.Store, lanceWriter *lance.Writer, progress *Controller, active []extract.Extractor, extractorSet, modelVersions string, trackID int64) error {
 	brief, err := catalog.GetTrackEmbedBrief(trackID)
 	if err != nil {
 		return err
@@ -492,14 +592,15 @@ func processTrack(ctx context.Context, cfg *Config, catalog *db.DB, store *lance
 	}
 	extract.L2Normalize(compiled)
 	lanceID := ""
-	if store != nil && store.Enabled() {
-		if lanceMu != nil {
-			lanceMu.Lock()
+	if lanceWriter != nil {
+		id, err := lanceWriter.Upsert(ctx, trackID, compiled)
+		if err != nil {
+			return err
 		}
+		lanceID = id
+	} else if store != nil && store.Enabled() {
+		// Fallback one-shot helper when warm writer is unavailable.
 		id, err := store.Upsert(ctx, trackID, compiled)
-		if lanceMu != nil {
-			lanceMu.Unlock()
-		}
 		if err != nil {
 			return err
 		}
