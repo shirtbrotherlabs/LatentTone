@@ -1,5 +1,21 @@
 # Product player notes (Phase 4)
 
+## Keyboard shortcuts (SPA)
+
+When focus is not in an input/textarea/select/contenteditable:
+
+| Key | Action |
+|-----|--------|
+| Space | Play / pause |
+| ← Back arrow | Restart current track from the beginning |
+| ↑ / ↓ | Volume up / down (~5% steps) |
+| `0` | Toggle dislike (thumbs-down) |
+| `1` | Toggle like (thumbs-up) |
+
+## Download
+
+Track ⋮ menu → **Download** hits `GET /api/v1/tracks/{id}/download` (same auth cookie). Filename is `Artist - Title.<ext>` for the active stream format; concurrent download transcodes wait on a small FFmpeg semaphore (separate from progressive stream slots).
+
 ## Continuity path
 
 1. Progressive first: `GET /api/v1/tracks/{id}/stream` for near-instant track switches.

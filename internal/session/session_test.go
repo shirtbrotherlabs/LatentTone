@@ -45,7 +45,7 @@ func TestSkipAdvancesAndIsolation(t *testing.T) {
 	catalog, userID, user2ID, id1, id2, id3 := seedDB(t)
 	defer catalog.Close()
 
-	w := session.NewWorker(catalog, nil, 4, 2)
+	w := session.NewWorker(catalog, nil, 4, 50, 2)
 	w.Neighbors = func(ctx context.Context, seedTrackID int64, k int) ([]affinity.Neighbor, error) {
 		return []affinity.Neighbor{
 			{TrackID: id2, Score: 0.9},
@@ -83,7 +83,7 @@ func TestDislikeAdvancesNowPlaying(t *testing.T) {
 	catalog, userID, _, id1, id2, id3 := seedDB(t)
 	defer catalog.Close()
 
-	w := session.NewWorker(catalog, nil, 4, 2)
+	w := session.NewWorker(catalog, nil, 4, 50, 2)
 	w.Neighbors = func(ctx context.Context, seedTrackID int64, k int) ([]affinity.Neighbor, error) {
 		return []affinity.Neighbor{
 			{TrackID: id2, Score: 0.9},
@@ -116,7 +116,7 @@ func TestCompleteAdvancesWithoutSkip(t *testing.T) {
 	catalog, userID, _, id1, id2, id3 := seedDB(t)
 	defer catalog.Close()
 
-	w := session.NewWorker(catalog, nil, 4, 2)
+	w := session.NewWorker(catalog, nil, 4, 50, 2)
 	w.Neighbors = func(ctx context.Context, seedTrackID int64, k int) ([]affinity.Neighbor, error) {
 		return []affinity.Neighbor{
 			{TrackID: id2, Score: 0.9},
@@ -150,7 +150,7 @@ func TestInjectQueuePinsNext(t *testing.T) {
 	catalog, userID, _, id1, id2, id3 := seedDB(t)
 	defer catalog.Close()
 
-	w := session.NewWorker(catalog, nil, 4, 2)
+	w := session.NewWorker(catalog, nil, 4, 50, 2)
 	w.Neighbors = func(ctx context.Context, seedTrackID int64, k int) ([]affinity.Neighbor, error) {
 		return []affinity.Neighbor{
 			{TrackID: id2, Score: 0.9},

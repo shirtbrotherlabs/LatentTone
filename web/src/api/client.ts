@@ -223,6 +223,14 @@ export const api = {
   getTrack(id: number) {
     return request<CatalogTrack>(`/api/v1/catalog/tracks/${id}`);
   },
+  /** Same-origin download URL; server applies stream prefs + Content-Disposition. */
+  downloadTrackUrl(id: number, opts?: { format?: string; bitrate_kbps?: number }) {
+    const params = new URLSearchParams();
+    if (opts?.format) params.set("format", opts.format);
+    if (opts?.bitrate_kbps != null) params.set("bitrate_kbps", String(opts.bitrate_kbps));
+    const q = params.toString();
+    return `/api/v1/tracks/${id}/download${q ? `?${q}` : ""}`;
+  },
   listYears() {
     return request<{ years: { year: number; count: number }[] }>("/api/v1/catalog/years");
   },

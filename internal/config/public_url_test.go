@@ -11,7 +11,7 @@ func TestNormalizePublicBaseURL(t *testing.T) {
 	if got := NormalizePublicBaseURL(""); got != DefaultPublicBaseURL {
 		t.Fatalf("empty: %q", got)
 	}
-	if got := NormalizePublicBaseURL("https://latent.lt.lkeng.org/"); got != "https://latent.lt.lkeng.org" {
+	if got := NormalizePublicBaseURL("https://music.example.org/"); got != "https://music.example.org" {
 		t.Fatalf("trim slash: %q", got)
 	}
 	if got := NormalizePublicBaseURL(" http://localhost:8080 "); got != "http://localhost:8080" {
@@ -20,8 +20,8 @@ func TestNormalizePublicBaseURL(t *testing.T) {
 }
 
 func TestAbsoluteURL(t *testing.T) {
-	c := &Config{PublicBaseURL: "https://latent.lt.lkeng.org"}
-	if got := c.AbsoluteURL("/covers/x.jpg"); got != "https://latent.lt.lkeng.org/covers/x.jpg" {
+	c := &Config{PublicBaseURL: "https://music.example.org"}
+	if got := c.AbsoluteURL("/covers/x.jpg"); got != "https://music.example.org/covers/x.jpg" {
 		t.Fatalf("relative: %q", got)
 	}
 	if got := c.AbsoluteURL("https://cdn.example/a.png"); got != "https://cdn.example/a.png" {

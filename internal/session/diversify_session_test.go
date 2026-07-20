@@ -44,7 +44,7 @@ func TestFillQueueArtistCooldown(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := session.NewWorker(catalog, nil, 4, 1)
+	w := session.NewWorker(catalog, nil, 4, 50, 1)
 	w.Rand = rand.New(rand.NewSource(1))
 	w.Neighbors = func(ctx context.Context, seedTrackID int64, k int) ([]affinity.Neighbor, error) {
 		return []affinity.Neighbor{

@@ -11,7 +11,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-export MUSIC_LIBRARY="${MUSIC_LIBRARY:-/mnt2/media/music}"
+export MUSIC_LIBRARY="${MUSIC_LIBRARY:?set MUSIC_LIBRARY to a host music library path (mounted :ro)}"
 export DATA_DIR="${DATA_DIR:-$(mktemp -d /tmp/latenttone-stream-XXXX)}"
 export MARIADB_DATA="${MARIADB_DATA:-$DATA_DIR/mariadb}"
 export BROWSE_PORT="${BROWSE_PORT:-18081}"

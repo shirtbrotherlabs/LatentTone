@@ -90,7 +90,7 @@ func New(cfg *config.Config, metaCfg *meta.Config, catalog *db.DB, scanner *scan
 			HelperPath: metaCfg.LanceHelperPath,
 		}
 	}
-	worker := session.NewWorker(catalog, lanceStore, cfg.MaxSessions, cfg.QueuePrefetch)
+	worker := session.NewWorker(catalog, lanceStore, cfg.MaxPlayingSessions, cfg.MaxCreatedSessions, cfg.QueuePrefetch)
 	// Progressive playback is the SPA hot path. Do not eagerly start FFmpeg HLS on
 	// every skip — that piled up encodes under load. serveHLS still EnsureHLS when
 	// a client actually requests the playlist.
@@ -210,6 +210,10 @@ func (s *Server) mountSPA(mux *http.ServeMux) {
 }
 
 func (s *Server) handleAPITracks(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.URL.Path, "/download") || strings.Contains(r.URL.Path, "/download") {
+		s.handleTrackDownload(w, r)
+		return
+	}
 	if strings.HasSuffix(r.URL.Path, "/stream") || strings.Contains(r.URL.Path, "/stream") {
 		s.handleTrackStream(w, r)
 		return

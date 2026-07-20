@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Author: martinsah
 // Date: 2026-07-15
+// Last-Modified: 2026-07-20
 
 package stream
 
@@ -314,3 +315,125 @@ func (m *Manager) ServeProgressiveTranscode(ctx context.Context, w http.Response
 	}
 	return nil
 }
+
+// FileExtensionForEncode returns the download filename extension for opts
+// (mp3/aac/opus) or the original path extension when format is original.
+func FileExtensionForEncode(relPath string, opts EncodeOpts) string {
+	switch strings.ToLower(strings.TrimSpace(opts.Format)) {
+	case "mp3":
+		return "mp3"
+	case "aac":
+		return "aac"
+	case "opus":
+		return "opus"
+	}
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(relPath)), ".")
+	if ext == "" {
+		return "bin"
+	}
+	return ext
+}
+
+// DownloadNeedsTranscode is true when the download must run FFmpeg.
+// Unlike progressive playback, "original" never transcodes for download.
+func DownloadNeedsTranscode(opts EncodeOpts) bool {
+	switch strings.ToLower(strings.TrimSpace(opts.Format)) {
+	case "mp3", "aac", "opus":
+		return true
+	default:
+		return false
+	}
+}
+
+// ServeDownloadTranscode encodes the full track to the response as an attachment.
+// Extra concurrent callers wait on dlSem (does not refuse with 503).
+func (m *Manager) ServeDownloadTranscode(ctx context.Context, w http.ResponseWriter, absPath string, opts EncodeOpts, filename string) error {
+	if err := assertUnderRoot(m.LibraryRoot, absPath); err != nil {
+		return err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if m.dlSem != nil {
+		select {
+		case m.dlSem <- struct{}{}:
+			defer func() { <-m.dlSem }()
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	ffArgs, ctype := ProgressiveFFmpegArgs(absPath, opts)
+	cmd := exec.Command(m.FFmpegPath, ffArgs...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("ffmpeg stdout: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("ffmpeg stderr: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("ffmpeg start: %w", err)
+	}
+
+	var killOnce sync.Once
+	kill := func() {
+		killOnce.Do(func() {
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+		})
+	}
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			kill()
+		case <-done:
+		}
+	}()
+
+	w.Header().Set("Content-Type", ctype)
+	w.Header().Set("Content-Disposition", contentDispositionAttachment(filename))
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("Accept-Ranges", "none")
+	w.WriteHeader(http.StatusOK)
+
+	errCh := make(chan []byte, 1)
+	go func() {
+		buf, _ := io.ReadAll(io.LimitReader(stderr, 4<<10))
+		errCh <- buf
+	}()
+
+	_, copyErr := io.Copy(w, stdout)
+	if copyErr != nil || ctx.Err() != nil {
+		kill()
+	}
+	waitErr := cmd.Wait()
+	errBuf := <-errCh
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if copyErr != nil {
+		return copyErr
+	}
+	if waitErr != nil {
+		msg := strings.TrimSpace(string(errBuf))
+		if msg == "" {
+			msg = waitErr.Error()
+		}
+		if m.Log != nil {
+			m.Log.Printf("download transcode %s: %s", filepath.Base(absPath), msg)
+		}
+		return fmt.Errorf("transcode failed: %s", msg)
+	}
+	return nil
+}
+
+// contentDispositionAttachment builds a Content-Disposition header value.
+func contentDispositionAttachment(filename string) string {
+	safe := strings.ReplaceAll(filename, `"`, `'`)
+	return fmt.Sprintf(`attachment; filename="%s"`, safe)
+}
+

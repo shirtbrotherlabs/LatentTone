@@ -57,6 +57,12 @@ curl -sS http://localhost:8080/api/v1/sessions/$SID -H "Authorization: Bearer $T
 curl -sS -OJ -H "Authorization: Bearer $TOKEN" \
   http://localhost:8080/api/v1/tracks/418/stream
 
+# Download (attachment; uses stream prefs unless format/bitrate_kbps query set)
+curl -sS -OJ -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/api/v1/tracks/418/download'
+# → Content-Disposition: attachment; filename="Artist - Title.ext"
+# Transcodes are queued (wait) rather than refused when FFmpeg slots are busy.
+
 # HLS playlist (session-scoped)
 curl -sS -H "Authorization: Bearer $TOKEN" \
   http://localhost:8080/api/v1/sessions/$SID/hls/index.m3u8

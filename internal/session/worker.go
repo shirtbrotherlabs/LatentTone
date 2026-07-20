@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Author: martinsah
 // Date: 2026-07-15
+// Last-Modified: 2026-07-20
 
 package session
 
@@ -105,28 +106,39 @@ type Worker struct {
 	Neighbors       NeighborFn
 	VectorNeighbors VectorNeighborFn
 	QueuePrefetch   int
-	MaxConcurrent   int
-	NeighborPool    int // ANN / flat pool size before diversification (default 80)
-	OnAdvance       func(sessionID string, trackID int64)
-	Rand            *rand.Rand // optional; tests inject a seed
+	// MaxPlaying caps sessions with status "playing" (active listen / encode load).
+	MaxPlaying int
+	// MaxCreated caps non-stopped sessions (created + playing).
+	MaxCreated   int
+	NeighborPool int // ANN / flat pool size before diversification (default 80)
+	OnAdvance    func(sessionID string, trackID int64)
+	Rand         *rand.Rand // optional; tests inject a seed
 
 	mu       sync.Mutex
 	sessions map[string]*Live
 }
 
 // NewWorker constructs a session worker.
-func NewWorker(catalog *db.DB, store *lance.Store, maxConcurrent, prefetch int) *Worker {
+// maxPlaying defaults to 12; maxCreated defaults to 50 (and is at least maxPlaying).
+func NewWorker(catalog *db.DB, store *lance.Store, maxPlaying, maxCreated, prefetch int) *Worker {
 	if prefetch <= 0 {
 		prefetch = 12
 	}
-	if maxConcurrent <= 0 {
-		maxConcurrent = 8
+	if maxPlaying <= 0 {
+		maxPlaying = 12
+	}
+	if maxCreated <= 0 {
+		maxCreated = 50
+	}
+	if maxCreated < maxPlaying {
+		maxCreated = maxPlaying
 	}
 	w := &Worker{
 		DB:            catalog,
 		Store:         store,
 		QueuePrefetch: prefetch,
-		MaxConcurrent: maxConcurrent,
+		MaxPlaying:    maxPlaying,
+		MaxCreated:    maxCreated,
 		NeighborPool:  affinity.DefaultPoolSize,
 		sessions:      make(map[string]*Live),
 	}
@@ -157,15 +169,22 @@ func (w *Worker) Create(ctx context.Context, userID, seedTrackID int64) (*Live, 
 	}
 
 	w.mu.Lock()
-	active := 0
+	playing, created := 0, 0
 	for _, s := range w.sessions {
-		if s.Status == db.SessionStatusPlaying || s.Status == db.SessionStatusCreated {
-			active++
+		switch s.Status {
+		case db.SessionStatusPlaying:
+			playing++
+			created++ // non-stopped inventory includes playing
+		case db.SessionStatusCreated:
+			created++
 		}
 	}
 	w.mu.Unlock()
-	if active >= w.MaxConcurrent {
-		return nil, fmt.Errorf("too many concurrent sessions")
+	if playing >= w.MaxPlaying {
+		return nil, fmt.Errorf("too many playing sessions")
+	}
+	if created >= w.MaxCreated {
+		return nil, fmt.Errorf("too many created sessions")
 	}
 
 	id, err := auth.NewOpaqueID()

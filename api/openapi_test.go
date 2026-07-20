@@ -51,6 +51,7 @@ func TestOpenAPIYAMLSkeleton(t *testing.T) {
 		"/api/v1/sessions/{id}/hls/index.m3u8",
 		"/api/v1/sessions/{id}/hls/{segment}",
 		"/api/v1/tracks/{id}/stream",
+		"/api/v1/tracks/{id}/download",
 		"/api/v1/playlists",
 		"/api/v1/playlists/{id}",
 		"/api/v1/me/playlists",

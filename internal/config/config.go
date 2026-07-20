@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Author: martinsah
 // Date: 2026-07-16
+// Last-Modified: 2026-07-20
 
 package config
 
@@ -15,8 +16,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// DefaultPublicBaseURL is the canonical reverse-proxied origin when unset.
-const DefaultPublicBaseURL = "https://latent.lt.lkeng.org"
+// DefaultPublicBaseURL is used when YAML/env leave public_base_url unset.
+const DefaultPublicBaseURL = "http://localhost:8080"
 
 // DefaultDatabaseDSN points at the Compose mariadb service hostname; override
 // via database_dsn (YAML) or DATABASE_DSN / LATENTTONE_DATABASE_DSN (env).
@@ -46,10 +47,16 @@ type Config struct {
 	EnableAPIDocs     bool          `yaml:"enable_api_docs"`
 	HLSRoot           string        `yaml:"hls_root"`
 	HLSTTL            time.Duration `yaml:"hls_ttl"`
-	MaxSessions       int           `yaml:"max_concurrent_sessions"`
-	QueuePrefetch     int           `yaml:"queue_prefetch"`
-	FFmpegPath        string        `yaml:"ffmpeg_path"`
-	SPARoot           string        `yaml:"spa_root"` // Phase 4 product SPA static root
+	// MaxPlayingSessions caps sessions with status "playing" (encode/listen load).
+	MaxPlayingSessions int `yaml:"max_playing_sessions"`
+	// MaxCreatedSessions caps non-stopped sessions (created + playing).
+	MaxCreatedSessions int `yaml:"max_created_sessions"`
+	// MaxSessions is the legacy yaml key max_concurrent_sessions. When set and
+	// max_playing_sessions is unset, it seeds MaxPlayingSessions.
+	MaxSessions   int    `yaml:"max_concurrent_sessions"`
+	QueuePrefetch int    `yaml:"queue_prefetch"`
+	FFmpegPath    string `yaml:"ffmpeg_path"`
+	SPARoot       string `yaml:"spa_root"` // Phase 4 product SPA static root
 
 	// SecureCookieYAML is the optional YAML override. Nil means "unset" so
 	// resolveSecureCookie can infer from https PublicBaseURL.
@@ -115,8 +122,18 @@ func (c *Config) applyDefaults() {
 	if c.HLSTTL <= 0 {
 		c.HLSTTL = 2 * time.Hour
 	}
-	if c.MaxSessions <= 0 {
-		c.MaxSessions = 8
+	if c.MaxPlayingSessions <= 0 {
+		if c.MaxSessions > 0 {
+			c.MaxPlayingSessions = c.MaxSessions
+		} else {
+			c.MaxPlayingSessions = 12
+		}
+	}
+	if c.MaxCreatedSessions <= 0 {
+		c.MaxCreatedSessions = 50
+	}
+	if c.MaxCreatedSessions < c.MaxPlayingSessions {
+		c.MaxCreatedSessions = c.MaxPlayingSessions
 	}
 	if c.QueuePrefetch <= 0 {
 		c.QueuePrefetch = 12

@@ -46,7 +46,7 @@ func TestFillQueueBridgeCadence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	w := NewWorker(catalog, nil, 4, 1)
+	w := NewWorker(catalog, nil, 4, 50, 1)
 	w.Rand = rand.New(rand.NewSource(3))
 	w.Neighbors = func(ctx context.Context, seedTrackID int64, k int) ([]affinity.Neighbor, error) {
 		return []affinity.Neighbor{{TrackID: n1, Score: 0.9}}, nil

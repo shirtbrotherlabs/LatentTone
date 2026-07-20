@@ -26,7 +26,7 @@ Suites:
   full    stream + embed profile + neighbor playlist API sanity
 
 Environment:
-  MUSIC_LIBRARY   default /mnt2/media/music (mounted :ro by Compose)
+  MUSIC_LIBRARY   required for browse/stream/full (Compose mount :ro; no default)
   DATA_DIR        optional shared override (otherwise per-step temp dirs)
   ARTISTS_MAX_S / ALBUMS_MAX_S / TRACKS_MAX_S / YEARS_MAX_S
                   optional catalog_perf_smoke latency budgets (seconds)
@@ -103,7 +103,8 @@ run_go_test() {
 run_smoke() {
   (
     cd "$RUN_ROOT"
-    export MUSIC_LIBRARY="${MUSIC_LIBRARY:-/mnt2/media/music}"
+    : "${MUSIC_LIBRARY:?set MUSIC_LIBRARY to a host music library path (mounted :ro)}"
+    export MUSIC_LIBRARY
     export BROWSE_PORT="${BROWSE_PORT:-18080}"
     export COMPOSE_PROJECT_NAME="lt-checkout-browse-$$"
     if [[ -z "${DATA_DIR:-}" ]]; then
@@ -120,7 +121,8 @@ run_smoke() {
 run_stream() {
   (
     cd "$RUN_ROOT"
-    export MUSIC_LIBRARY="${MUSIC_LIBRARY:-/mnt2/media/music}"
+    : "${MUSIC_LIBRARY:?set MUSIC_LIBRARY to a host music library path (mounted :ro)}"
+    export MUSIC_LIBRARY
     export BROWSE_PORT="${STREAM_BROWSE_PORT:-18081}"
     export COMPOSE_PROJECT_NAME="lt-checkout-stream-$$"
     # Always isolate stream DATA_DIR from browse step (fresh scan inside stream_smoke).
@@ -142,7 +144,8 @@ run_embed_neighbor() {
 
   (
     cd "$RUN_ROOT"
-    export MUSIC_LIBRARY="${MUSIC_LIBRARY:-/mnt2/media/music}"
+    : "${MUSIC_LIBRARY:?set MUSIC_LIBRARY to a host music library path (mounted :ro)}"
+    export MUSIC_LIBRARY
     export DATA_DIR="$data_dir"
     export MARIADB_DATA="${MARIADB_DATA:-$data_dir/mariadb}"
     export BROWSE_PORT="$port"
@@ -222,8 +225,7 @@ if [[ -n "$REF" ]]; then
   RUN_ROOT="$WORKTREE"
 fi
 
-export MUSIC_LIBRARY="${MUSIC_LIBRARY:-/mnt2/media/music}"
-echo "test_checkout suite=$SUITE root=$RUN_ROOT music=$MUSIC_LIBRARY"
+echo "test_checkout suite=$SUITE root=$RUN_ROOT music=${MUSIC_LIBRARY:-"(unset; required for browse+)"}"
 
 step "go test internal/db + internal/web" run_go_test_db_web
 step "go test ./..." run_go_test

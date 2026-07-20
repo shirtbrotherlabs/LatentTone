@@ -28,13 +28,13 @@ services:
     environment:
       TZ: UTC
       # Canonical HTTPS origin behind reverse proxy (MediaSession artwork, absolute links).
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://latent.lt.lkeng.org/}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8080}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       DATABASE_DSN: latenttone:${MARIADB_PASSWORD}@tcp(mariadb:3306)/latenttone?parseTime=true&charset=utf8mb4&collation=utf8mb4_unicode_ci
     volumes:
       # Test/dev library — READ ONLY (required)
-      - ${MUSIC_LIBRARY:-/mnt2/media/music}:/music:ro
+      - ${MUSIC_LIBRARY:?set MUSIC_LIBRARY in .env}:/music:ro
       - ${DATA_DIR:-./data}:/data
       - ./configs/scanner.yaml:/config/scanner.yaml:ro
       - ./configs/metadata.yaml:/config/metadata.yaml:ro
@@ -61,14 +61,14 @@ services:
       - "${BROWSE_PORT:-8080}:8080"
     environment:
       TZ: UTC
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://latent.lt.lkeng.org/}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8080}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       DATABASE_DSN: latenttone:${MARIADB_PASSWORD}@tcp(mariadb:3306)/latenttone?parseTime=true&charset=utf8mb4&collation=utf8mb4_unicode_ci
       # Keep CI / stream-smoke fast: no library walk on container start.
       LATENTTONE_SCAN_ON_START: "0"
     volumes:
-      - ${MUSIC_LIBRARY:-/mnt2/media/music}:/music:ro
+      - ${MUSIC_LIBRARY:?set MUSIC_LIBRARY in .env}:/music:ro
       - ${DATA_DIR:-./data}:/data
       # stream-smoke overlay: enable_stream_probe + enable_api_docs
       - ./configs/scanner-stream-smoke.yaml:/config/scanner.yaml:ro
@@ -97,7 +97,7 @@ services:
       TZ: UTC
       DATABASE_DSN: latenttone:${MARIADB_PASSWORD}@tcp(mariadb:3306)/latenttone?parseTime=true&charset=utf8mb4&collation=utf8mb4_unicode_ci
     volumes:
-      - ${MUSIC_LIBRARY:-/mnt2/media/music}:/music:ro
+      - ${MUSIC_LIBRARY:?set MUSIC_LIBRARY in .env}:/music:ro
       - ${DATA_DIR:-./data}:/data
       - ./configs/scanner.yaml:/config/scanner.yaml:ro
     command: ["scan", "--config", "/config/scanner.yaml"]
@@ -113,7 +113,7 @@ services:
       TZ: UTC
       DATABASE_DSN: latenttone:${MARIADB_PASSWORD}@tcp(mariadb:3306)/latenttone?parseTime=true&charset=utf8mb4&collation=utf8mb4_unicode_ci
     volumes:
-      - ${MUSIC_LIBRARY:-/mnt2/media/music}:/music:ro
+      - ${MUSIC_LIBRARY:?set MUSIC_LIBRARY in .env}:/music:ro
       - ${DATA_DIR:-./data}:/data
       - ./configs/metadata.yaml:/config/metadata.yaml:ro
       - ./configs/scanner.yaml:/config/scanner.yaml:ro
@@ -130,7 +130,7 @@ services:
       TZ: UTC
       DATABASE_DSN: latenttone:${MARIADB_PASSWORD}@tcp(mariadb:3306)/latenttone?parseTime=true&charset=utf8mb4&collation=utf8mb4_unicode_ci
     volumes:
-      - ${MUSIC_LIBRARY:-/mnt2/media/music}:/music:ro
+      - ${MUSIC_LIBRARY:?set MUSIC_LIBRARY in .env}:/music:ro
       - ${DATA_DIR:-./data}:/data
       - ./configs/metadata-ml.yaml:/config/metadata.yaml:ro
       - ./configs/essentia_profile.yaml:/config/essentia_profile.yaml:ro

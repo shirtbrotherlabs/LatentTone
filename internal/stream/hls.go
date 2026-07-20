@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Author: martinsah
 // Date: 2026-07-15
+// Last-Modified: 2026-07-20
 
 package stream
 
@@ -19,6 +20,10 @@ import (
 // retries otherwise pile up encodes and starve the API under Opus prefs.
 const maxProgressiveEncodes = 2
 
+// Max concurrent full-track download transcodes. HTTP accepts unlimited
+// download requests; extras wait on this semaphore instead of failing.
+const maxDownloadEncodes = 2
+
 // Manager runs FFmpeg HLS generation under /data/hls/{session_id}.
 type Manager struct {
 	HLSRoot     string
@@ -30,6 +35,7 @@ type Manager struct {
 	mu      sync.Mutex
 	procs   map[string]*exec.Cmd
 	progSem chan struct{}
+	dlSem   chan struct{}
 }
 
 // NewManager constructs an HLS manager.
@@ -48,6 +54,7 @@ func NewManager(hlsRoot, libraryRoot, ffmpeg string, ttl time.Duration) *Manager
 		Log:         log.Default(),
 		procs:       make(map[string]*exec.Cmd),
 		progSem:     make(chan struct{}, maxProgressiveEncodes),
+		dlSem:       make(chan struct{}, maxDownloadEncodes),
 	}
 }
 

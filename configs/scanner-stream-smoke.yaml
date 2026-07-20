@@ -38,6 +38,7 @@ enable_stream_probe: true
 enable_api_docs: true
 hls_root: /data/hls
 hls_ttl: 1h
-max_concurrent_sessions: 4
+max_playing_sessions: 4
+max_created_sessions: 8
 queue_prefetch: 12
 ffmpeg_path: ffmpeg

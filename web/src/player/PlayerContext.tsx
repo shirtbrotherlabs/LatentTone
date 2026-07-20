@@ -906,7 +906,6 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.code !== "Space" && e.key !== " ") return;
       const t = e.target as HTMLElement | null;
       if (
         t &&
@@ -919,12 +918,40 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       }
       const active = status && status.status !== "stopped";
       if (!active) return;
-      e.preventDefault();
-      void togglePlayPause();
+
+      if (e.code === "Space" || e.key === " ") {
+        e.preventDefault();
+        void togglePlayPause();
+        return;
+      }
+      switch (e.key) {
+        case "ArrowLeft":
+          e.preventDefault();
+          engineRef.current?.restartFromStart();
+          break;
+        case "ArrowUp":
+          e.preventDefault();
+          setVolume(Math.min(1, (engineRef.current?.getVolume() ?? volume) + 0.05));
+          break;
+        case "ArrowDown":
+          e.preventDefault();
+          setVolume(Math.max(0, (engineRef.current?.getVolume() ?? volume) - 0.05));
+          break;
+        case "0":
+          e.preventDefault();
+          void feedback(trackFeedback === "dislike" ? "clear" : "dislike");
+          break;
+        case "1":
+          e.preventDefault();
+          void feedback(trackFeedback === "like" ? "clear" : "like");
+          break;
+        default:
+          break;
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [status, togglePlayPause]);
+  }, [status, togglePlayPause, setVolume, volume, feedback, trackFeedback]);
 
   const value = useMemo(
     () => ({

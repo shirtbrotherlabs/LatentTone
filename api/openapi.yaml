@@ -211,6 +211,10 @@ paths:
         Starts a session from `seed_track_id`. Returns short-poll status including
         `now_playing`, `queue`, `hls_url`, and `progressive_url`.
 
+        Concurrent limits (defaults): at most 12 **playing** and 50 **created**
+        (non-stopped: created + playing) sessions host-wide. Exceeding either
+        returns 503 (`too many playing sessions` / `too many created sessions`).
+
         Warning: long-lived sessions hold HLS disk under `hls_root`; always DELETE
         when finished. Swagger Try-it is for contract probing, not Gate B listen verification.
       operationId: createSession
@@ -237,7 +241,7 @@ paths:
         '401':
           $ref: '#/components/responses/Error'
         '503':
-          description: Too many concurrent sessions
+          description: Too many playing or created sessions
           content:
             application/json:
               schema:
@@ -570,15 +574,75 @@ paths:
               schema:
                 type: string
                 format: binary
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+
+  /api/v1/tracks/{id}/download:
+    get:
+      tags: [stream]
+      summary: Download track (original or transcode)
+      description: |
+        Full-file download for offline save. Defaults to the caller's stream
+        prefs (`stream_format` / `bitrate_kbps`). Optional query overrides:
+        `format=original|mp3|aac|opus`, `bitrate_kbps`.
+
+        Response includes `Content-Disposition: attachment` with a sanitized
+        `Artist - Title.ext` filename. Transcode downloads are queued: unlimited
+        concurrent HTTP requests wait on a small FFmpeg semaphore (does not 503
+        when busy).
+      operationId: downloadTrack
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            example: 1
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [original, mp3, aac, opus]
+        - name: bitrate_kbps
+          in: query
+          schema:
+            type: integer
+            minimum: 32
+            maximum: 512
+      responses:
+        '200':
+          description: Attachment audio bytes
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+                example: 'attachment; filename="Artist - Title.mp3"'
+          content:
+            audio/mpeg:
+              schema:
+                type: string
+                format: binary
+            audio/flac:
+              schema:
+                type: string
+                format: binary
+            audio/aac:
+              schema:
+                type: string
+                format: binary
             audio/ogg:
-              schema:
-                type: string
-                format: binary
-            audio/mp4:
-              schema:
-                type: string
-                format: binary
-            audio/wav:
               schema:
                 type: string
                 format: binary
@@ -586,9 +650,13 @@ paths:
               schema:
                 type: string
                 format: binary
-        '401':
+        '400':
+          $ref: '#/components/responses/Error'
+        '403':
           $ref: '#/components/responses/Error'
         '404':
+          $ref: '#/components/responses/Error'
+        '503':
           $ref: '#/components/responses/Error'
 
   /api/v1/playlists:

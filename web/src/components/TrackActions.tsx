@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-only
  * Author: martinsah
  * Date: 2026-07-16
+ * Last-Modified: 2026-07-20
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -60,6 +61,18 @@ export function TrackActions({ track }: Props) {
           </button>
           <button type="button" role="menuitem" onClick={() => navigate(`/library/tracks/${track.id}`)}>
             More info
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              // Same-origin navigation so the browser honors Content-Disposition
+              // and sends the session cookie (stream prefs apply server-side).
+              window.location.assign(api.downloadTrackUrl(track.id));
+            }}
+          >
+            Download
           </button>
           <button
             type="button"

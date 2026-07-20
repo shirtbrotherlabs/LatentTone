@@ -52,8 +52,9 @@ listen_addr: ":8080"
 
 # Canonical public origin for reverse-proxy deployments (MediaSession artwork,
 # absolute links). Overridden by PUBLIC_BASE_URL / LATENTTONE_PUBLIC_URL.
-# No trailing slash required; empty defaults to https://latent.lt.lkeng.org
-public_base_url: https://latent.lt.lkeng.org
+# Leave empty for local Compose (Compose sets PUBLIC_BASE_URL=http://localhost:8080).
+# Example: https://example.com
+public_base_url:
 
 # Phase 3 — auth & streaming (ADR-005 / ADR-006)
 auth_mode: authenticated          # authenticated | open (solo-dev escape hatch)
@@ -65,7 +66,10 @@ enable_stream_probe: false        # Gate C1: /dev/stream (debug only; product SP
 enable_api_docs: false            # Phase 3B: /api/docs Swagger UI
 hls_root: /data/hls
 hls_ttl: 2h
-max_concurrent_sessions: 8
+# Playing = actively listening (encode load). Created = non-stopped inventory
+# (created + playing). Legacy max_concurrent_sessions still seeds playing if set.
+max_playing_sessions: 12
+max_created_sessions: 50
 queue_prefetch: 12
 ffmpeg_path: ffmpeg
 spa_root: /usr/share/latenttone/app   # Phase 4 product SPA (empty/missing = SPA disabled)
