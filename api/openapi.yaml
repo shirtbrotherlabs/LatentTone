@@ -1517,6 +1517,14 @@ components:
           type: integer
           format: int64
           minimum: 1
+        seed_album_id:
+          type: integer
+          format: int64
+          minimum: 1
+        mode:
+          type: string
+          enum: [radio, album]
+          description: album = finite playthrough (no Radio ANN); requires seed_album_id
 
     StationList:
       type: object

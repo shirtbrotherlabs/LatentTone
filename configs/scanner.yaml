@@ -65,7 +65,9 @@ enable_stream_probe: false        # Gate C1: /dev/stream (debug only; product SP
 enable_api_docs: false            # Phase 3B: /api/docs Swagger UI
 hls_root: /data/hls
 hls_ttl: 2h
-max_concurrent_sessions: 8
+max_concurrent_sessions: 64
+max_sessions_per_user: 16
+session_idle_ttl: 45m
 queue_prefetch: 12
 ffmpeg_path: ffmpeg
 spa_root: /usr/share/latenttone/app   # Phase 4 product SPA (empty/missing = SPA disabled)

@@ -72,6 +72,8 @@ type PlayerState = {
   currentTime: number;
   duration: number;
   startRadio: (seed: number | CreateSessionSeed) => Promise<void>;
+  /** Play an album linearly (no Radio / ANN). */
+  playAlbum: (albumId: number) => Promise<void>;
   /**
    * Resume an active station worker when possible; otherwise start a new session
    * seeded from the station's last now-playing (or seed) track.
@@ -567,6 +569,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     [armPlaybackChrome],
   );
 
+  const playAlbum = useCallback(
+    async (albumId: number) => {
+      await startRadio({ mode: "album", seed_album_id: albumId });
+    },
+    [startRadio],
+  );
+
   const resumeStation = useCallback(
     async (station: Station) => {
       if (isLiveStatus(station.status)) {
@@ -970,6 +979,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       currentTime,
       duration,
       startRadio,
+      playAlbum,
       resumeStation,
       stop,
       feedback,
@@ -1000,6 +1010,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       currentTime,
       duration,
       startRadio,
+      playAlbum,
       resumeStation,
       stop,
       feedback,

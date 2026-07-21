@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-only
  * Author: martinsah
  * Date: 2026-07-16
- * Last-Modified: 2026-07-20
+ * Last-Modified: 2026-07-21
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -12,6 +12,7 @@ import { api } from "../api/client";
 import type {
   DuplicateGroup,
   EmbedStatus,
+  ListeningSessionRow,
   RadioPrefs,
   ScanSchedule,
   ScanStatus,
@@ -20,6 +21,16 @@ import type {
 import { useAuth } from "../auth/AuthContext";
 import { usePlayer } from "../player/PlayerContext";
 
+function formatSessionWhen(iso?: string): string {
+  if (!iso) return "—";
+  const d = Date.parse(iso);
+  if (!Number.isFinite(d)) return iso;
+  try {
+    return new Date(d).toLocaleString();
+  } catch {
+    return iso;
+  }
+}
 type ReadySample = { t: number; ready: number };
 
 /** Human duration for ETA copy (e.g. "about 2h 15m"). */
@@ -107,6 +118,11 @@ export function SettingsPage() {
   const [dupes, setDupes] = useState<DuplicateGroup[] | null>(null);
   const [dupesRule, setDupesRule] = useState("");
   const [dupesBusy, setDupesBusy] = useState(false);
+  const [listeningSessions, setListeningSessions] = useState<ListeningSessionRow[]>([]);
+  const [sessionMeta, setSessionMeta] = useState<{
+    idle_ttl_seconds: number;
+    max_per_user: number;
+  } | null>(null);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [passwordMsg, setPasswordMsg] = useState<string | null>(null);
@@ -119,6 +135,7 @@ export function SettingsPage() {
     | "stream"
     | "end-station"
     | "password"
+    | "sessions"
     | null
   >(null);
   const [error, setError] = useState<string | null>(null);
@@ -180,6 +197,26 @@ export function SettingsPage() {
     }
   }, [user]);
 
+  const loadListeningSessions = useCallback(async () => {
+    if (!user) {
+      setListeningSessions([]);
+      setSessionMeta(null);
+      return;
+    }
+    try {
+      const res = isAdmin
+        ? await api.listAdminListeningSessions()
+        : await api.listMyListeningSessions();
+      setListeningSessions(res.sessions ?? []);
+      setSessionMeta({
+        idle_ttl_seconds: res.idle_ttl_seconds,
+        max_per_user: res.max_per_user,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "sessions failed");
+    }
+  }, [user, isAdmin]);
+
   useEffect(() => {
     void refresh();
     const t = window.setInterval(() => void refresh(), 2500);
@@ -194,6 +231,27 @@ export function SettingsPage() {
     void loadStream();
   }, [loadStream]);
 
+  useEffect(() => {
+    void loadListeningSessions();
+    const t = window.setInterval(() => void loadListeningSessions(), 8000);
+    return () => window.clearInterval(t);
+  }, [loadListeningSessions]);
+
+  const stopListeningSession = async (id: string) => {
+    setBusy("sessions");
+    setError(null);
+    try {
+      await api.stopSession(id);
+      if (status?.id === id) {
+        await stop();
+      }
+      await loadListeningSessions();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "stop session failed");
+    } finally {
+      setBusy(null);
+    }
+  };
   const startScan = async (force = false) => {
     setBusy("scan");
     setError(null);
@@ -378,6 +436,56 @@ export function SettingsPage() {
             </button>
             {passwordMsg ? <p className="muted">{passwordMsg}</p> : null}
           </form>
+        </div>
+
+        <div className="tile">
+          <h3>{isAdmin ? "All listening sessions" : "Your listening sessions"}</h3>
+          <p className="muted">
+            Active radio and album sessions
+            {sessionMeta
+              ? ` · up to ${sessionMeta.max_per_user} per user · idle reclaim after ${Math.round(sessionMeta.idle_ttl_seconds / 60)}m`
+              : ""}
+            . Oldest sessions are stopped when you start a new one at the cap.
+          </p>
+          {listeningSessions.length === 0 ? (
+            <p className="muted" style={{ marginTop: "0.75rem" }}>
+              {user ? "No active sessions." : "Sign in to view sessions."}
+            </p>
+          ) : (
+            <ul className="settings-session-list">
+              {listeningSessions.map((s) => (
+                <li key={s.id} className="settings-session-row">
+                  <div>
+                    {isAdmin ? (
+                      <strong>
+                        {s.username || `user ${s.user_id}`}
+                        <span className="muted"> · </span>
+                      </strong>
+                    ) : null}
+                    <span>{s.kind === "album" ? "Album" : "Radio"}</span>
+                    <span className="muted"> · {s.status}</span>
+                    {s.now_playing_title ? (
+                      <div className="muted">
+                        Now: {s.now_playing_artist ? `${s.now_playing_artist} — ` : ""}
+                        {s.now_playing_title}
+                      </div>
+                    ) : null}
+                    <div className="muted" style={{ fontSize: "0.85rem" }}>
+                      Last active {formatSessionWhen(s.last_active_at || s.updated_at)}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    disabled={busy === "sessions"}
+                    onClick={() => void stopListeningSession(s.id)}
+                  >
+                    Stop
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
 
         <div className="tile settings-stream-tile">

@@ -27,6 +27,7 @@ import type {
   StreamPrefs,
   StreamPrefsPatch,
   User,
+  ListeningSessionsResponse,
 } from "./types";
 
 export class ApiError extends Error {
@@ -121,6 +122,16 @@ export const api = {
   listStations(limit = 12) {
     return request<{ stations: Station[] }>(`/api/v1/me/stations?limit=${limit}`);
   },
+  listMyListeningSessions(limit = 100) {
+    return request<ListeningSessionsResponse>(
+      `/api/v1/me/listening-sessions?limit=${limit}`,
+    );
+  },
+  listAdminListeningSessions(limit = 200) {
+    return request<ListeningSessionsResponse>(
+      `/api/v1/admin/listening-sessions?limit=${limit}`,
+    );
+  },
   createSession(seed: number | CreateSessionSeed) {
     const body =
       typeof seed === "number"
@@ -131,6 +142,8 @@ export const api = {
             seed_genre_id: seed.seed_genre_id,
             seed_genre: seed.seed_genre,
             seed_playlist_id: seed.seed_playlist_id,
+            seed_album_id: seed.seed_album_id,
+            mode: seed.mode,
           };
     return request<SessionStatus>("/api/v1/sessions", {
       method: "POST",

@@ -120,6 +120,18 @@ func (s *Server) handleCatalogAlbums(w http.ResponseWriter, r *http.Request, res
 		return
 	}
 	trackRows := trackJSONList(tracks)
+	marks := db.MarkAlbumDuplicates(tracks)
+	for i := range trackRows {
+		if i < len(marks) {
+			if marks[i].IsDuplicate {
+				trackRows[i]["is_duplicate"] = true
+				trackRows[i]["preferred_track_id"] = marks[i].PreferredID
+				trackRows[i]["duplicate_reason"] = marks[i].Reason
+			} else {
+				trackRows[i]["is_duplicate"] = false
+			}
+		}
+	}
 	s.enrichTrackMaps(r, trackRows)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"album":  albumJSON(al),

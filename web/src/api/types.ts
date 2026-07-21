@@ -29,6 +29,8 @@ export type SessionStatus = {
   id: string;
   user_id: number;
   status: string;
+  /** radio = affinity station; album = finite album playthrough */
+  kind?: string;
   seed_track_id: number;
   now_playing?: TrackRef | null;
   /** Recently played/skipped (oldest → newest), capped server-side. */
@@ -66,6 +68,10 @@ export type CatalogTrack = {
   feedback?: "like" | "dislike" | string;
   /** Global play count when API-enriched. */
   play_count?: number;
+  /** Album-view duplicate suppress (lower-quality copy). */
+  is_duplicate?: boolean;
+  preferred_track_id?: number;
+  duplicate_reason?: string;
 };
 
 export type CatalogAlbum = {
@@ -114,6 +120,8 @@ export type CreateSessionSeed = {
   seed_genre_id?: number;
   seed_genre?: string;
   seed_playlist_id?: number;
+  seed_album_id?: number;
+  mode?: "radio" | "album";
 };
 
 export type PlaylistHeader = {
@@ -253,4 +261,27 @@ export type Station = {
   stopped_at?: string;
   seed_track?: CatalogTrack;
   now_playing?: CatalogTrack;
+};
+
+/** Active listening session row for Settings. */
+export type ListeningSessionRow = {
+  id: string;
+  user_id: number;
+  username: string;
+  status: string;
+  kind?: string;
+  seed_track_id?: number;
+  now_playing_id?: number;
+  now_playing_title?: string;
+  now_playing_artist?: string;
+  created_at: string;
+  updated_at: string;
+  last_active_at?: string;
+};
+
+export type ListeningSessionsResponse = {
+  sessions: ListeningSessionRow[];
+  idle_ttl_seconds: number;
+  max_per_user: number;
+  max_concurrent: number;
 };

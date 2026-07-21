@@ -91,6 +91,8 @@ func New(cfg *config.Config, metaCfg *meta.Config, catalog *db.DB, scanner *scan
 		}
 	}
 	worker := session.NewWorker(catalog, lanceStore, cfg.MaxSessions, cfg.QueuePrefetch)
+	worker.MaxPerUser = cfg.MaxSessionsPerUser
+	worker.IdleTTL = cfg.SessionIdleTTL
 	// Progressive playback is the SPA hot path. Do not eagerly start FFmpeg HLS on
 	// every skip — that piled up encodes under load. serveHLS still EnsureHLS when
 	// a client actually requests the playlist.
@@ -111,7 +113,7 @@ func New(cfg *config.Config, metaCfg *meta.Config, catalog *db.DB, scanner *scan
 	}
 	if serveCtx != nil {
 		go func() {
-			t := time.NewTicker(15 * time.Minute)
+			t := time.NewTicker(5 * time.Minute)
 			defer t.Stop()
 			for {
 				select {
@@ -119,6 +121,10 @@ func New(cfg *config.Config, metaCfg *meta.Config, catalog *db.DB, scanner *scan
 					return
 				case <-t.C:
 					hls.SweepTTL()
+					n := worker.ReclaimIdle()
+					if n > 0 && s.Log != nil {
+						s.Log.Printf("session idle reclaim: stopped %d", n)
+					}
 				}
 			}
 		}()
@@ -156,6 +162,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/me/radio-prefs", s.handleMeRadioPrefs)
 	mux.HandleFunc("/api/v1/me/stream-prefs", s.handleMeStreamPrefs)
 	mux.HandleFunc("/api/v1/me/stations", s.handleMeStations)
+	mux.HandleFunc("/api/v1/me/listening-sessions", s.handleMeListeningSessions)
+	mux.HandleFunc("/api/v1/admin/listening-sessions", s.handleAdminListeningSessions)
 	mux.HandleFunc("/api/v1/config", s.handlePublicConfig)
 
 	mux.HandleFunc("/api/v1/auth/register", s.handleAuthRegister)
