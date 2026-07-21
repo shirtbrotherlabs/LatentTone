@@ -134,7 +134,13 @@ func userPublic(u *db.User) map[string]any {
 }
 
 type createSessionBody struct {
-	SeedTrackID int64 `json:"seed_track_id"`
+	SeedTrackID    int64  `json:"seed_track_id"`
+	SeedArtistID   int64  `json:"seed_artist_id"`
+	SeedGenreID    int64  `json:"seed_genre_id"`
+	SeedGenre      string `json:"seed_genre"`
+	SeedPlaylistID int64  `json:"seed_playlist_id"`
+	SeedAlbumID    int64  `json:"seed_album_id"`
+	Mode           string `json:"mode"` // ""|"radio" or "album"
 }
 
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
@@ -170,6 +176,13 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if parts[1] == "feedback" && r.Method == http.MethodPost {
 		auth.RequireUser(func(w http.ResponseWriter, r *http.Request) {
 			s.postFeedback(w, r, sessionID)
+		})(w, r)
+		return
+	}
+
+	if parts[1] == "queue" && len(parts) >= 3 && parts[2] == "order" && r.Method == http.MethodPut {
+		auth.RequireUser(func(w http.ResponseWriter, r *http.Request) {
+			s.putQueueOrder(w, r, sessionID)
 		})(w, r)
 		return
 	}
@@ -211,11 +224,53 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONBody(w, r, &body) {
 		return
 	}
-	if body.SeedTrackID <= 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "seed_track_id required"})
+	mode := strings.ToLower(strings.TrimSpace(body.Mode))
+	if mode == "album" || body.SeedAlbumID > 0 {
+		albumID := body.SeedAlbumID
+		if albumID <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "seed_album_id required for album mode"})
+			return
+		}
+		tracks, err := s.DB.ListTracksByAlbum(albumID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		ids := db.PlayableAlbumTrackIDs(tracks)
+		if len(ids) == 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "album has no playable tracks"})
+			return
+		}
+		live, err := s.Sessions.CreateAlbum(r.Context(), u.ID, ids)
+		if err != nil {
+			msg := err.Error()
+			code := http.StatusBadRequest
+			if strings.Contains(msg, "too many") {
+				code = http.StatusServiceUnavailable
+			}
+			writeJSON(w, code, map[string]string{"error": msg})
+			return
+		}
+		writeJSON(w, http.StatusCreated, s.Sessions.ToStatus(live))
 		return
 	}
-	live, err := s.Sessions.Create(r.Context(), u.ID, body.SeedTrackID)
+
+	seedID := body.SeedTrackID
+	if seedID <= 0 {
+		var err error
+		seedID, err = s.DB.PickSeedTrackID(body.SeedArtistID, body.SeedGenreID, body.SeedPlaylistID, body.SeedGenre)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	if seedID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "seed_track_id or seed_artist_id / seed_genre_id / seed_playlist_id / seed_album_id required",
+		})
+		return
+	}
+	live, err := s.Sessions.Create(r.Context(), u.ID, seedID)
 	if err != nil {
 		msg := err.Error()
 		code := http.StatusBadRequest
@@ -249,6 +304,9 @@ func (s *Server) getSession(w http.ResponseWriter, r *http.Request, sessionID st
 func (s *Server) stopSession(w http.ResponseWriter, r *http.Request, sessionID string) {
 	u := auth.UserFrom(r.Context())
 	live, err := s.Sessions.Get(sessionID, u.ID)
+	if err != nil && err.Error() == "forbidden" && u.IsAdmin {
+		live, err = s.Sessions.GetAsAdmin(sessionID)
+	}
 	if err != nil {
 		if err.Error() == "forbidden" {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
@@ -403,6 +461,41 @@ func (s *Server) deleteQueueTrack(w http.ResponseWriter, r *http.Request, sessio
 	writeJSON(w, http.StatusOK, s.Sessions.ToStatus(live))
 }
 
+
+type queueOrderBody struct {
+	TrackIDs []int64 `json:"track_ids"`
+}
+
+func (s *Server) putQueueOrder(w http.ResponseWriter, r *http.Request, sessionID string) {
+	u := auth.UserFrom(r.Context())
+	live, err := s.Sessions.Get(sessionID, u.ID)
+	if err != nil {
+		if err.Error() == "forbidden" {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if live == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	var body queueOrderBody
+	if !decodeJSONBody(w, r, &body) {
+		return
+	}
+	if len(body.TrackIDs) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "track_ids required"})
+		return
+	}
+	if err := s.Sessions.ReorderQueue(r.Context(), live, body.TrackIDs); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.Sessions.ToStatus(live))
+}
+
 func (s *Server) serveHLS(w http.ResponseWriter, r *http.Request, sessionID string, rest []string) {
 	u := auth.UserFrom(r.Context())
 	live, err := s.Sessions.Get(sessionID, u.ID)
@@ -481,6 +574,10 @@ func (s *Server) handleTrackStream(w http.ResponseWriter, r *http.Request) {
 		abs, err := stream.ResolveMediaPath(s.Cfg.LibraryRoot, t.Path)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid media path"})
+			return
+		}
+		if _, err := os.Stat(abs); err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "media file missing on disk"})
 			return
 		}
 		u := auth.UserFrom(r.Context())

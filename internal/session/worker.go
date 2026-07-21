@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,14 +34,17 @@ type Live struct {
 	UserID       int64
 	SeedTrackID  int64
 	Status       string
+	Kind         string // db.SessionKindRadio | db.SessionKindAlbum
 	NowPlayingID int64
 	Queue        []int64
 	Pinned       map[int64]struct{} // user_pin track ids (ADR-007 V5b)
-	Sources      map[int64]string   // track_id → source tag (user_pin | radio_bridge)
+	Sources      map[int64]string   // track_id → source tag (user_pin | radio_bridge | album)
 	Recent       []int64
 	// History is previously played/skipped tracks (most recent at end). Used by Back.
 	History      []int64
 	LastFeedback FeedbackAck
+	CreatedAt    time.Time
+	LastActive   time.Time
 
 	// Radio diversification state (in-memory; resets if process reloads session from the catalog DB).
 	ArtistPenalties   map[string]float64
@@ -65,6 +69,7 @@ type StatusDTO struct {
 	ID          string    `json:"id"`
 	UserID      int64     `json:"user_id"`
 	Status      string    `json:"status"`
+	Kind        string    `json:"kind,omitempty"`
 	SeedTrackID int64     `json:"seed_track_id"`
 	NowPlaying  *TrackRef `json:"now_playing"`
 	// History is recently played/skipped tracks (oldest → newest), capped for SPA.
@@ -106,7 +111,9 @@ type Worker struct {
 	VectorNeighbors VectorNeighborFn
 	QueuePrefetch   int
 	MaxConcurrent   int
-	NeighborPool    int // ANN / flat pool size before diversification (default 80)
+	MaxPerUser      int           // default 16
+	IdleTTL         time.Duration // default 45m
+	NeighborPool    int           // ANN / flat pool size before diversification (default 80)
 	OnAdvance       func(sessionID string, trackID int64)
 	Rand            *rand.Rand // optional; tests inject a seed
 
@@ -120,13 +127,15 @@ func NewWorker(catalog *db.DB, store *lance.Store, maxConcurrent, prefetch int) 
 		prefetch = 12
 	}
 	if maxConcurrent <= 0 {
-		maxConcurrent = 8
+		maxConcurrent = 64
 	}
 	w := &Worker{
 		DB:            catalog,
 		Store:         store,
 		QueuePrefetch: prefetch,
 		MaxConcurrent: maxConcurrent,
+		MaxPerUser:    DefaultMaxSessionsPerUser,
+		IdleTTL:       DefaultSessionIdleTTL,
 		NeighborPool:  affinity.DefaultPoolSize,
 		sessions:      make(map[string]*Live),
 	}
@@ -156,17 +165,7 @@ func (w *Worker) Create(ctx context.Context, userID, seedTrackID int64) (*Live, 
 		return nil, fmt.Errorf("seed track not found")
 	}
 
-	w.mu.Lock()
-	active := 0
-	for _, s := range w.sessions {
-		if s.Status == db.SessionStatusPlaying || s.Status == db.SessionStatusCreated {
-			active++
-		}
-	}
-	w.mu.Unlock()
-	if active >= w.MaxConcurrent {
-		return nil, fmt.Errorf("too many concurrent sessions")
-	}
+	w.ensureCapacity(userID)
 
 	id, err := auth.NewOpaqueID()
 	if err != nil {
@@ -176,16 +175,20 @@ func (w *Worker) Create(ctx context.Context, userID, seedTrackID int64) (*Live, 
 		return nil, err
 	}
 
+	now := time.Now().UTC()
 	live := &Live{
 		ID:              id,
 		UserID:          userID,
 		SeedTrackID:     seedTrackID,
 		Status:          db.SessionStatusPlaying,
+		Kind:            db.SessionKindRadio,
 		NowPlayingID:    seedTrackID,
 		Pinned:          map[int64]struct{}{},
 		Sources:         map[int64]string{},
 		Recent:          []int64{seedTrackID},
 		ArtistPenalties: map[string]float64{},
+		CreatedAt:       now,
+		LastActive:      now,
 	}
 	w.onTrackStarted(live, seedTrackID, "")
 	_ = w.fillQueue(ctx, live)
@@ -200,6 +203,69 @@ func (w *Worker) Create(ctx context.Context, userID, seedTrackID int64) (*Live, 
 		w.OnAdvance(id, seedTrackID)
 	}
 	_, _ = w.DB.InsertPlaybackEvent(userID, seedTrackID, id)
+	return live, nil
+}
+
+// CreateAlbum starts a finite album playthrough from ordered track IDs (duplicates
+// already filtered by the caller). Does not ANN-refill; stops when the queue ends.
+func (w *Worker) CreateAlbum(ctx context.Context, userID int64, trackIDs []int64) (*Live, error) {
+	_ = ctx
+	if len(trackIDs) == 0 {
+		return nil, fmt.Errorf("album has no playable tracks")
+	}
+	for _, id := range trackIDs {
+		t, err := w.DB.GetTrack(id)
+		if err != nil {
+			return nil, err
+		}
+		if t == nil || t.MissingAt.Valid {
+			return nil, fmt.Errorf("track %d not found", id)
+		}
+	}
+
+	w.ensureCapacity(userID)
+
+	sid, err := auth.NewOpaqueID()
+	if err != nil {
+		return nil, err
+	}
+	seed := trackIDs[0]
+	if _, err := w.DB.CreateListeningSessionKind(sid, userID, seed, db.SessionKindAlbum); err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	live := &Live{
+		ID:              sid,
+		UserID:          userID,
+		SeedTrackID:     seed,
+		Status:          db.SessionStatusPlaying,
+		Kind:            db.SessionKindAlbum,
+		NowPlayingID:    seed,
+		Pinned:          map[int64]struct{}{},
+		Sources:         map[int64]string{},
+		Recent:          []int64{seed},
+		ArtistPenalties: map[string]float64{},
+		CreatedAt:       now,
+		LastActive:      now,
+	}
+	rest := trackIDs[1:]
+	for _, id := range rest {
+		live.Pinned[id] = struct{}{}
+		live.Sources[id] = "album"
+	}
+	live.Queue = append([]int64(nil), rest...)
+	w.onTrackStarted(live, seed, "album")
+	_ = w.persist(live, "")
+
+	w.mu.Lock()
+	w.sessions[sid] = live
+	w.mu.Unlock()
+
+	if w.OnAdvance != nil {
+		w.OnAdvance(sid, seed)
+	}
+	_, _ = w.DB.InsertPlaybackEvent(userID, seed, sid)
 	return live, nil
 }
 
@@ -243,7 +309,7 @@ func (w *Worker) fillQueue(ctx context.Context, live *Live) error {
 func (w *Worker) scheduleQueueRefill(live *Live, replaceSeed int64) {
 	go func(l *Live, seedOverride int64) {
 		l.mu.Lock()
-		if l.Status == db.SessionStatusStopped {
+		if l.Status == db.SessionStatusStopped || l.Kind == db.SessionKindAlbum {
 			l.mu.Unlock()
 			return
 		}
@@ -287,6 +353,13 @@ func (w *Worker) scheduleQueueRefill(live *Live, replaceSeed int64) {
 // Create may call it on a private Live before publishing; scheduleQueueRefill is
 // the safe path for live sessions.
 func (w *Worker) fillQueueFrom(ctx context.Context, live *Live, seedOverride int64) error {
+	live.mu.Lock()
+	if live.Kind == db.SessionKindAlbum {
+		live.mu.Unlock()
+		return nil
+	}
+	live.mu.Unlock()
+
 	// Snapshot under lock so concurrent poll/feedback can proceed during ANN.
 	live.mu.Lock()
 	need := w.QueuePrefetch
@@ -532,14 +605,25 @@ func (w *Worker) persist(live *Live, feedbackJSON string) error {
 }
 
 // Get returns a live session if owned by userID (or loads from DB).
+// asAdmin skips the ownership check (admin stop / inspect).
 func (w *Worker) Get(sessionID string, userID int64) (*Live, error) {
+	return w.get(sessionID, userID, false)
+}
+
+// GetAsAdmin loads a session regardless of owner.
+func (w *Worker) GetAsAdmin(sessionID string) (*Live, error) {
+	return w.get(sessionID, 0, true)
+}
+
+func (w *Worker) get(sessionID string, userID int64, asAdmin bool) (*Live, error) {
 	w.mu.Lock()
 	live, ok := w.sessions[sessionID]
 	w.mu.Unlock()
 	if ok {
-		if live.UserID != userID {
+		if !asAdmin && live.UserID != userID {
 			return nil, fmt.Errorf("forbidden")
 		}
+		w.Touch(live)
 		return live, nil
 	}
 	row, err := w.DB.GetListeningSession(sessionID)
@@ -549,21 +633,47 @@ func (w *Worker) Get(sessionID string, userID int64) (*Live, error) {
 	if row == nil {
 		return nil, nil
 	}
-	if row.UserID != userID {
+	if !asAdmin && row.UserID != userID {
 		return nil, fmt.Errorf("forbidden")
 	}
+	// Stale DB rows: stop instead of resurrecting as live.
+	if row.Status == db.SessionStatusPlaying || row.Status == db.SessionStatusCreated {
+		ttl := w.IdleTTL
+		if ttl <= 0 {
+			ttl = DefaultSessionIdleTTL
+		}
+		if updated, ok := parseSessionTime(row.UpdatedAt); ok && time.Since(updated) > ttl {
+			_ = w.DB.UpdateListeningSessionState(row.ID, db.SessionStatusStopped, nullInt64(row.NowPlayingID), nil, "", "idle reclaim")
+			queue, _ := db.ParseQueueJSON(nullString(row.QueueJSON))
+			stopped := &Live{
+				ID: row.ID, UserID: row.UserID, SeedTrackID: nullInt64(row.SeedTrackID),
+				Status: db.SessionStatusStopped, Kind: row.Kind, NowPlayingID: nullInt64(row.NowPlayingID),
+				Queue: queue, Pinned: map[int64]struct{}{}, Sources: map[int64]string{},
+				Recent: []int64{}, ArtistPenalties: map[string]float64{},
+			}
+			return stopped, nil
+		}
+	}
 	queue, _ := db.ParseQueueJSON(nullString(row.QueueJSON))
+	now := time.Now().UTC()
+	created := now
+	if t, ok := parseSessionTime(row.CreatedAt); ok {
+		created = t
+	}
 	live = &Live{
 		ID:              row.ID,
 		UserID:          row.UserID,
 		SeedTrackID:     nullInt64(row.SeedTrackID),
 		Status:          row.Status,
+		Kind:            row.Kind,
 		NowPlayingID:    nullInt64(row.NowPlayingID),
 		Queue:           queue,
 		Pinned:          map[int64]struct{}{},
 		Sources:         map[int64]string{},
 		Recent:          []int64{},
 		ArtistPenalties: map[string]float64{},
+		CreatedAt:       created,
+		LastActive:      now,
 	}
 	if row.LastFeedback.Valid {
 		var ack FeedbackAck
@@ -577,6 +687,20 @@ func (w *Worker) Get(sessionID string, userID int64) (*Live, error) {
 	return live, nil
 }
 
+func parseSessionTime(s string) (time.Time, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, false
+	}
+	layouts := []string{time.RFC3339Nano, time.RFC3339, "2006-01-02 15:04:05", "2006-01-02T15:04:05"}
+	for _, layout := range layouts {
+		if t, err := time.ParseInLocation(layout, s, time.UTC); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
 // Advance moves to next track (natural end or skip).
 func (w *Worker) Advance(ctx context.Context, live *Live) error {
 	live.mu.Lock()
@@ -586,12 +710,14 @@ func (w *Worker) Advance(ctx context.Context, live *Live) error {
 
 func (w *Worker) advanceLocked(ctx context.Context, live *Live) error {
 	if len(live.Queue) == 0 {
-		// fillQueueFrom locks internally — must not call while holding live.mu.
-		live.mu.Unlock()
-		_ = w.fillQueueFrom(ctx, live, 0)
-		live.mu.Lock()
-		if live.Status == db.SessionStatusStopped {
-			return fmt.Errorf("session stopped")
+		if live.Kind != db.SessionKindAlbum {
+			// fillQueueFrom locks internally — must not call while holding live.mu.
+			live.mu.Unlock()
+			_ = w.fillQueueFrom(ctx, live, 0)
+			live.mu.Lock()
+			if live.Status == db.SessionStatusStopped {
+				return fmt.Errorf("session stopped")
+			}
 		}
 	}
 	if len(live.Queue) == 0 {
@@ -933,6 +1059,57 @@ func (w *Worker) RemoveFromQueue(ctx context.Context, live *Live, trackID int64)
 	return nil
 }
 
+
+// ReorderQueue rebuilds the pinned front-of-queue order to match trackIDs
+// (front to back). Unknown / no-longer-queued ids are ignored rather than
+// erroring so a stale client reorder cannot brick the queue. Auto-filled
+// tracks not present in trackIDs keep their existing relative order and are
+// appended after the reordered pins.
+func (w *Worker) ReorderQueue(ctx context.Context, live *Live, trackIDs []int64) error {
+	live.mu.Lock()
+	defer live.mu.Unlock()
+	if len(trackIDs) == 0 {
+		return fmt.Errorf("track_ids required")
+	}
+	if live.Status == db.SessionStatusStopped {
+		return fmt.Errorf("session stopped")
+	}
+	w.ensurePinned(live)
+	seen := map[int64]struct{}{}
+	ordered := make([]int64, 0, len(trackIDs))
+	for _, id := range trackIDs {
+		if id <= 0 {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		if !contains(live.Queue, id) {
+			continue
+		}
+		seen[id] = struct{}{}
+		ordered = append(ordered, id)
+	}
+	if len(ordered) == 0 {
+		return fmt.Errorf("no known tracks in track_ids")
+	}
+	_, auto := w.splitQueue(live)
+	for _, id := range ordered {
+		auto = filterOut(auto, id)
+		live.Pinned[id] = struct{}{}
+		if _, ok := live.Sources[id]; !ok {
+			live.Sources[id] = "user_pin"
+		}
+	}
+	live.Queue = append(ordered, auto...)
+	if err := w.persist(live, ""); err != nil {
+		return err
+	}
+	w.scheduleQueueRefill(live, 0)
+	_ = ctx
+	return nil
+}
+
 // errQueueConflict is returned when the track is already playing (cannot re-queue as next).
 var errQueueConflict = fmt.Errorf("track is now playing")
 
@@ -957,6 +1134,7 @@ func (w *Worker) ToStatus(live *Live) StatusDTO {
 		ID:             live.ID,
 		UserID:         live.UserID,
 		Status:         live.Status,
+		Kind:           live.Kind,
 		SeedTrackID:    live.SeedTrackID,
 		HLSURL:         fmt.Sprintf("/api/v1/sessions/%s/hls/index.m3u8", live.ID),
 		ProgressiveURL: "",

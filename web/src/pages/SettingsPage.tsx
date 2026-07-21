@@ -3,13 +3,67 @@
  * SPDX-License-Identifier: GPL-3.0-only
  * Author: martinsah
  * Date: 2026-07-16
+ * Last-Modified: 2026-07-21
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api/client";
-import type { EmbedStatus, RadioPrefs, ScanSchedule, ScanStatus, StreamPrefs } from "../api/types";
+import type {
+  DuplicateGroup,
+  EmbedStatus,
+  ListeningSessionRow,
+  RadioPrefs,
+  ScanSchedule,
+  ScanStatus,
+  StreamPrefs,
+} from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { usePlayer } from "../player/PlayerContext";
+
+function formatSessionWhen(iso?: string): string {
+  if (!iso) return "—";
+  const d = Date.parse(iso);
+  if (!Number.isFinite(d)) return iso;
+  try {
+    return new Date(d).toLocaleString();
+  } catch {
+    return iso;
+  }
+}
+type ReadySample = { t: number; ready: number };
+
+/** Human duration for ETA copy (e.g. "about 2h 15m"). */
+function formatEta(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "";
+  if (seconds < 45) return "less than a minute";
+  if (seconds < 3600) {
+    const m = Math.max(1, Math.round(seconds / 60));
+    return m === 1 ? "about 1 minute" : `about ${m} minutes`;
+  }
+  const h = Math.floor(seconds / 3600);
+  const m = Math.round((seconds % 3600) / 60);
+  if (m <= 0) return h === 1 ? "about 1 hour" : `about ${h} hours`;
+  if (h >= 10) return `about ${h} hours`;
+  return `about ${h}h ${m}m`;
+}
+
+function estimateIdentityEta(
+  samples: ReadySample[],
+  remaining: number,
+  running: boolean,
+): string | null {
+  if (!running || remaining <= 0) return null;
+  if (samples.length < 2) return "estimating…";
+  const first = samples[0];
+  const last = samples[samples.length - 1];
+  const dt = (last.t - first.t) / 1000;
+  const dr = last.ready - first.ready;
+  if (dt < 4 || dr < 1) return "estimating…";
+  const rate = dr / dt; // tracks ready per second
+  if (rate <= 0) return "estimating…";
+  return formatEta(remaining / rate);
+}
 
 type RadioToggleKey = keyof Pick<
   RadioPrefs,
@@ -61,6 +115,14 @@ export function SettingsPage() {
   const [embed, setEmbed] = useState<EmbedStatus | null>(null);
   const [radio, setRadio] = useState<RadioPrefs | null>(null);
   const [stream, setStream] = useState<StreamPrefs | null>(null);
+  const [dupes, setDupes] = useState<DuplicateGroup[] | null>(null);
+  const [dupesRule, setDupesRule] = useState("");
+  const [dupesBusy, setDupesBusy] = useState(false);
+  const [listeningSessions, setListeningSessions] = useState<ListeningSessionRow[]>([]);
+  const [sessionMeta, setSessionMeta] = useState<{
+    idle_ttl_seconds: number;
+    max_per_user: number;
+  } | null>(null);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [passwordMsg, setPasswordMsg] = useState<string | null>(null);
@@ -73,9 +135,12 @@ export function SettingsPage() {
     | "stream"
     | "end-station"
     | "password"
+    | "sessions"
     | null
   >(null);
   const [error, setError] = useState<string | null>(null);
+  const [identityEta, setIdentityEta] = useState<string | null>(null);
+  const readySamples = useRef<ReadySample[]>([]);
 
   const refresh = useCallback(async () => {
     try {
@@ -89,6 +154,18 @@ export function SettingsPage() {
       setSchedule(sched);
       if (sched?.interval_seconds) {
         setScheduleHours(String(Math.max(1, Math.round(sched.interval_seconds / 3600))));
+      }
+      if (embedStatus?.running) {
+        const next = [
+          ...readySamples.current,
+          { t: Date.now(), ready: embedStatus.ready },
+        ].slice(-12);
+        readySamples.current = next;
+        const left = Math.max(0, embedStatus.pending + embedStatus.processing);
+        setIdentityEta(estimateIdentityEta(next, left, true));
+      } else {
+        readySamples.current = [];
+        setIdentityEta(null);
       }
       setError(null);
     } catch (e) {
@@ -120,6 +197,26 @@ export function SettingsPage() {
     }
   }, [user]);
 
+  const loadListeningSessions = useCallback(async () => {
+    if (!user) {
+      setListeningSessions([]);
+      setSessionMeta(null);
+      return;
+    }
+    try {
+      const res = isAdmin
+        ? await api.listAdminListeningSessions()
+        : await api.listMyListeningSessions();
+      setListeningSessions(res.sessions ?? []);
+      setSessionMeta({
+        idle_ttl_seconds: res.idle_ttl_seconds,
+        max_per_user: res.max_per_user,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "sessions failed");
+    }
+  }, [user, isAdmin]);
+
   useEffect(() => {
     void refresh();
     const t = window.setInterval(() => void refresh(), 2500);
@@ -134,6 +231,27 @@ export function SettingsPage() {
     void loadStream();
   }, [loadStream]);
 
+  useEffect(() => {
+    void loadListeningSessions();
+    const t = window.setInterval(() => void loadListeningSessions(), 8000);
+    return () => window.clearInterval(t);
+  }, [loadListeningSessions]);
+
+  const stopListeningSession = async (id: string) => {
+    setBusy("sessions");
+    setError(null);
+    try {
+      await api.stopSession(id);
+      if (status?.id === id) {
+        await stop();
+      }
+      await loadListeningSessions();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "stop session failed");
+    } finally {
+      setBusy(null);
+    }
+  };
   const startScan = async (force = false) => {
     setBusy("scan");
     setError(null);
@@ -246,8 +364,11 @@ export function SettingsPage() {
   const artists = scan?.artists ?? 0;
   const albums = scan?.albums ?? 0;
   const tracks = scan?.tracks ?? embed?.catalog_tracks ?? 0;
-  const embedPct =
-    embed && embed.claimed > 0 ? Math.min(100, Math.round((100 * embed.done) / embed.claimed)) : 0;
+  const identityReady = embed?.ready ?? 0;
+  const identityTotal = Math.max(tracks, embed?.catalog_tracks ?? 0, identityReady);
+  const identityLeft = Math.max(0, (embed?.pending ?? 0) + (embed?.processing ?? 0));
+  const identityPct =
+    identityTotal > 0 ? Math.min(100, Math.round((100 * identityReady) / identityTotal)) : 0;
 
   return (
     <section>
@@ -315,6 +436,56 @@ export function SettingsPage() {
             </button>
             {passwordMsg ? <p className="muted">{passwordMsg}</p> : null}
           </form>
+        </div>
+
+        <div className="tile">
+          <h3>{isAdmin ? "All listening sessions" : "Your listening sessions"}</h3>
+          <p className="muted">
+            Active radio and album sessions
+            {sessionMeta
+              ? ` · up to ${sessionMeta.max_per_user} per user · idle reclaim after ${Math.round(sessionMeta.idle_ttl_seconds / 60)}m`
+              : ""}
+            . Oldest sessions are stopped when you start a new one at the cap.
+          </p>
+          {listeningSessions.length === 0 ? (
+            <p className="muted" style={{ marginTop: "0.75rem" }}>
+              {user ? "No active sessions." : "Sign in to view sessions."}
+            </p>
+          ) : (
+            <ul className="settings-session-list">
+              {listeningSessions.map((s) => (
+                <li key={s.id} className="settings-session-row">
+                  <div>
+                    {isAdmin ? (
+                      <strong>
+                        {s.username || `user ${s.user_id}`}
+                        <span className="muted"> · </span>
+                      </strong>
+                    ) : null}
+                    <span>{s.kind === "album" ? "Album" : "Radio"}</span>
+                    <span className="muted"> · {s.status}</span>
+                    {s.now_playing_title ? (
+                      <div className="muted">
+                        Now: {s.now_playing_artist ? `${s.now_playing_artist} — ` : ""}
+                        {s.now_playing_title}
+                      </div>
+                    ) : null}
+                    <div className="muted" style={{ fontSize: "0.85rem" }}>
+                      Last active {formatSessionWhen(s.last_active_at || s.updated_at)}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    disabled={busy === "sessions"}
+                    onClick={() => void stopListeningSession(s.id)}
+                  >
+                    Stop
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
 
         <div className="tile settings-stream-tile">
@@ -415,38 +586,54 @@ export function SettingsPage() {
         </div>
 
         <div className="tile">
-          <h3>Library stats</h3>
-          <div className="stat-row">
-            <div>
-              <strong>{artists.toLocaleString()}</strong>
-              <span className="muted"> artists</span>
-            </div>
-            <div>
-              <strong>{albums.toLocaleString()}</strong>
-              <span className="muted"> albums</span>
-            </div>
-            <div>
-              <strong>{tracks.toLocaleString()}</strong>
-              <span className="muted"> tracks</span>
-            </div>
-          </div>
+          <h3>Library</h3>
+          <p className="library-summary">
+            <strong>{tracks.toLocaleString()}</strong> tracks
+            <span className="muted">
+              {" "}
+              · {artists.toLocaleString()} artists · {albums.toLocaleString()} albums
+            </span>
+          </p>
           {embed ? (
+            <div className="identity-summary">
+              <div className="identity-summary-head">
+                <span>Acoustic identity</span>
+                <span className="muted">{identityPct}%</span>
+              </div>
+              <div
+                className="identity-bar"
+                role="progressbar"
+                aria-valuenow={identityPct}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-label="Acoustic identity progress"
+              >
+                <div className="identity-bar-fill" style={{ width: `${identityPct}%` }} />
+              </div>
+              <p className="muted identity-summary-detail">
+                {identityReady.toLocaleString()} of {identityTotal.toLocaleString()} tracks ready
+                {identityLeft > 0 ? ` · ${identityLeft.toLocaleString()} left` : ""}
+              </p>
+              {embed.running ? (
+                <p className="identity-eta">
+                  Scanning now
+                  {identityEta && identityEta !== "estimating…"
+                    ? ` — ${identityEta} left`
+                    : identityEta
+                      ? ` — ${identityEta}`
+                      : ""}
+                </p>
+              ) : identityLeft > 0 ? (
+                <p className="muted identity-eta">Not finished — start an acoustic scan to continue.</p>
+              ) : identityTotal > 0 ? (
+                <p className="identity-eta identity-eta-done">Complete</p>
+              ) : null}
+            </div>
+          ) : (
             <p className="muted" style={{ marginTop: "0.75rem" }}>
-              Acoustic identity ready: {embed.ready.toLocaleString()} · pending{" "}
-              {embed.pending.toLocaleString()} · processing {embed.processing.toLocaleString()}
+              Loading library status…
             </p>
-          ) : null}
-          {embed?.scanners?.length ? (
-            <ul className="scanner-list">
-              {embed.scanners.map((row) => (
-                <li key={row.name}>
-                  {row.label || row.name}: {row.ready?.toLocaleString() ?? 0}/
-                  {row.total?.toLocaleString() ?? tracks.toLocaleString()} ({row.pct ?? 0}%)
-                  {row.enabled === false ? " · disabled" : ""}
-                </li>
-              ))}
-            </ul>
-          ) : null}
+          )}
         </div>
 
         <div className="tile">
@@ -535,12 +722,16 @@ export function SettingsPage() {
         <div className="tile">
           <h3>Scan acoustic identity</h3>
           <p className="muted">
-            Embeddings / acoustic profile job
+            Build the listening fingerprint for each track
             {embed?.running
-              ? ` · running ${embedPct}% (${embed.done}/${embed.claimed})`
-              : " · idle"}
+              ? identityEta && identityEta !== "estimating…"
+                ? ` · in progress, ${identityEta} left`
+                : " · in progress"
+              : identityLeft > 0
+                ? ` · ${identityLeft.toLocaleString()} tracks still need a scan`
+                : " · idle"}
           </p>
-          {embed?.last ? <p className="muted">Last: {embed.last}</p> : null}
+          {embed?.last && !embed.running ? <p className="muted">Last: {embed.last}</p> : null}
           {isAdmin ? (
             <div className="toolbar" style={{ marginTop: "0.75rem" }}>
               <button
@@ -569,6 +760,57 @@ export function SettingsPage() {
       </div>
 
       {error ? <p className="error">{error}</p> : null}
+
+      <div className="tile" style={{ marginTop: "1rem" }}>
+        <h2 className="tile-title">Possible duplicates</h2>
+        <p className="muted" style={{ marginTop: 0 }}>
+          Groups where title, album, and artist match after ignoring capitalization/punctuation,
+          and durations are within 1 second. Acoustic embeddings are not used.
+        </p>
+        <button
+          type="button"
+          className="btn"
+          disabled={dupesBusy}
+          onClick={() => {
+            setDupesBusy(true);
+            setError(null);
+            void api
+              .listDuplicates(100)
+              .then((r) => {
+                setDupes(r.groups);
+                setDupesRule(r.rule);
+              })
+              .catch((e) => setError(e instanceof Error ? e.message : "failed"))
+              .finally(() => setDupesBusy(false));
+          }}
+        >
+          {dupesBusy ? "Scanning…" : dupes ? "Refresh" : "Find duplicates"}
+        </button>
+        {dupesRule ? (
+          <p className="muted" style={{ fontSize: "0.85rem" }}>
+            Rule: {dupesRule}
+          </p>
+        ) : null}
+        {dupes && dupes.length === 0 ? <p className="muted">No duplicate groups found.</p> : null}
+        {dupes?.map((g) => (
+          <div key={`${g.artist}|${g.album}|${g.title}|${g.duration_ms}`} className="dup-group">
+            <strong>
+              {g.artist} — {g.title}
+            </strong>
+            <div className="muted">
+              {g.album} · {g.count} files · ~{Math.round(g.duration_ms / 1000)}s
+            </div>
+            <ul>
+              {g.tracks.map((t) => (
+                <li key={t.id}>
+                  <Link to={`/library/tracks/${t.id}`}>#{t.id}</Link>{" "}
+                  {(t as { path?: string }).path || t.title}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
     </section>
   );
 }

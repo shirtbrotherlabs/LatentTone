@@ -46,10 +46,12 @@ type Config struct {
 	EnableAPIDocs     bool          `yaml:"enable_api_docs"`
 	HLSRoot           string        `yaml:"hls_root"`
 	HLSTTL            time.Duration `yaml:"hls_ttl"`
-	MaxSessions       int           `yaml:"max_concurrent_sessions"`
-	QueuePrefetch     int           `yaml:"queue_prefetch"`
-	FFmpegPath        string        `yaml:"ffmpeg_path"`
-	SPARoot           string        `yaml:"spa_root"` // Phase 4 product SPA static root
+	MaxSessions         int           `yaml:"max_concurrent_sessions"`
+	MaxSessionsPerUser  int           `yaml:"max_sessions_per_user"`
+	SessionIdleTTL      time.Duration `yaml:"session_idle_ttl"`
+	QueuePrefetch       int           `yaml:"queue_prefetch"`
+	FFmpegPath          string        `yaml:"ffmpeg_path"`
+	SPARoot             string        `yaml:"spa_root"` // Phase 4 product SPA static root
 
 	// SecureCookieYAML is the optional YAML override. Nil means "unset" so
 	// resolveSecureCookie can infer from https PublicBaseURL.
@@ -116,7 +118,13 @@ func (c *Config) applyDefaults() {
 		c.HLSTTL = 2 * time.Hour
 	}
 	if c.MaxSessions <= 0 {
-		c.MaxSessions = 8
+		c.MaxSessions = 64
+	}
+	if c.MaxSessionsPerUser <= 0 {
+		c.MaxSessionsPerUser = 16
+	}
+	if c.SessionIdleTTL <= 0 {
+		c.SessionIdleTTL = 45 * time.Minute
 	}
 	if c.QueuePrefetch <= 0 {
 		c.QueuePrefetch = 12

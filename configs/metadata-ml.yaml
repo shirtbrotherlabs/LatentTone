@@ -28,7 +28,7 @@ lancedb_path: /data/lancedb
 lancedb_table: track_vectors
 lance_helper_path: /usr/local/lib/latenttone/lance_helper.py
 
-concurrency: 2
+concurrency: 4
 sample_mode: random
 max_tracks: 4
 sample_seed: 42

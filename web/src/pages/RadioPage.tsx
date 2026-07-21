@@ -3,12 +3,13 @@
  * SPDX-License-Identifier: GPL-3.0-only
  * Author: martinsah
  * Date: 2026-07-17
+ * Last-Modified: 2026-07-20
  */
 
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
-import type { CatalogTrack, Station } from "../api/types";
+import type { CatalogArtist, CatalogGenre, CatalogTrack, Station } from "../api/types";
 import { usePlayer } from "../player/PlayerContext";
 
 function stationCover(st: Station): string | undefined {
@@ -40,6 +41,8 @@ export function RadioPage() {
   const { startRadio, resumeStation, starting, error, status } = usePlayer();
   const navigate = useNavigate();
   const [suggestions, setSuggestions] = useState<CatalogTrack[]>([]);
+  const [genres, setGenres] = useState<CatalogGenre[]>([]);
+  const [artists, setArtists] = useState<CatalogArtist[]>([]);
   const [stations, setStations] = useState<Station[]>([]);
   const [localError, setLocalError] = useState<string | null>(null);
   const [resumingId, setResumingId] = useState<string | null>(null);
@@ -56,6 +59,14 @@ export function RadioPage() {
       .listSeedSuggestions(12)
       .then((r) => setSuggestions(r.tracks))
       .catch(() => setSuggestions([]));
+    void api
+      .listGenres(24)
+      .then((r) => setGenres(r.genres))
+      .catch(() => setGenres([]));
+    void api
+      .listArtists()
+      .then((r) => setArtists(r.artists.slice(0, 18)))
+      .catch(() => setArtists([]));
     reloadStations();
   }, [reloadStations]);
 
@@ -63,10 +74,10 @@ export function RadioPage() {
     reloadStations();
   }, [status?.id, status?.status, reloadStations]);
 
-  const playSeed = async (trackId: number) => {
+  const playSeed = async (seed: number | { seed_artist_id?: number; seed_genre_id?: number }) => {
     setLocalError(null);
     try {
-      await startRadio(trackId);
+      await startRadio(seed);
       navigate("/now-playing");
     } catch (err) {
       setLocalError(err instanceof Error ? err.message : "failed");
@@ -77,87 +88,112 @@ export function RadioPage() {
     <section>
       <h1 className="page-title page-title-sm">Radio</h1>
       <p className="muted" style={{ marginTop: 0 }}>
-        Start a continuous station from a seed, or pick up a recent one.
+        Start a continuous station from a track, artist, or genre seed — or pick up a recent one.
+        Queue source tags show neighbor vs bridge vs pin when listening.
       </p>
-
       {(localError || error) && <p className="error">{localError || error}</p>}
 
       {stations.length > 0 ? (
-        <div className="station-section">
-          <h2>Pick up where you left off</h2>
-          <p className="muted station-hint">
-            Recent radio stations. Live tiles reconnect when possible; stopped tiles start a new
-            station from the last track.
-          </p>
-          <div className="grid-list seed-grid">
-            {stations.map((st) => {
-              const cover = stationCover(st);
-              const busy = resumingId === st.id || starting;
-              return (
-                <div key={st.id} className="tile seed-tile station-tile">
-                  {cover ? (
-                    <img className="seed-cover" src={cover} alt="" />
-                  ) : (
-                    <div className="seed-cover seed-cover-fallback" aria-hidden>
-                      LT
-                    </div>
-                  )}
-                  <div className="seed-tile-text">
-                    <h3>{stationTitle(st)}</h3>
-                    <p>
-                      {stationSubtitle(st)}
-                      {st.started_at ? ` · ${st.started_at.slice(0, 16).replace("T", " ")}` : ""}
-                    </p>
+        <>
+          <h2 className="section-title">Your stations</h2>
+          <div className="cover-grid">
+            {stations.map((st) => (
+              <button
+                key={st.id}
+                type="button"
+                className="tile tile-cover-card"
+                disabled={!!resumingId || starting}
+                onClick={() => {
+                  setResumingId(st.id);
+                  setLocalError(null);
+                  void resumeStation(st)
+                    .then(() => navigate("/now-playing"))
+                    .catch((err) => setLocalError(err instanceof Error ? err.message : "failed"))
+                    .finally(() => setResumingId(null));
+                }}
+              >
+                {stationCover(st) ? (
+                  <img className="tile-cover" src={stationCover(st)} alt="" />
+                ) : (
+                  <div className="tile-cover tile-cover-fallback" aria-hidden>
+                    {(stationTitle(st)[0] || "?").toUpperCase()}
                   </div>
-                  <button
-                    type="button"
-                    className="btn btn-compact"
-                    disabled={busy}
-                    title="Play"
-                    onClick={() => {
-                      setLocalError(null);
-                      setResumingId(st.id);
-                      void resumeStation(st)
-                        .then(() => navigate("/now-playing"))
-                        .catch((err) => {
-                          setLocalError(err instanceof Error ? err.message : "failed");
-                        })
-                        .finally(() => setResumingId(null));
-                    }}
-                  >
-                    {busy && resumingId === st.id ? "…" : "Play"}
-                  </button>
-                </div>
-              );
-            })}
+                )}
+                <span className="tile-label">{stationTitle(st)}</span>
+                <span className="tile-sub muted">{stationSubtitle(st)}</span>
+              </button>
+            ))}
           </div>
-        </div>
+        </>
       ) : null}
 
-      <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400 }}>Quick seeds</h2>
-      <div className="grid-list seed-grid" style={{ marginTop: "0.75rem" }}>
+      <h2 className="section-title">Quick seeds</h2>
+      <div className="cover-grid">
         {suggestions.map((t) => (
           <button
             key={t.id}
             type="button"
-            className="tile seed-tile"
+            className="tile tile-cover-card"
             disabled={starting}
             onClick={() => void playSeed(t.id)}
           >
             {t.cover_url ? (
-              <img className="seed-cover" src={t.cover_url} alt="" />
+              <img className="tile-cover" src={t.cover_url} alt="" />
             ) : (
-              <div className="seed-cover seed-cover-fallback" aria-hidden>
-                LT
+              <div className="tile-cover tile-cover-fallback" aria-hidden>
+                {(t.title[0] || "?").toUpperCase()}
               </div>
             )}
-            <div className="seed-tile-text">
-              <h3>{t.title}</h3>
-              <p>{t.artist}</p>
-            </div>
+            <span className="tile-label">{t.title}</span>
+            <span className="tile-sub muted">{t.artist}</span>
           </button>
         ))}
       </div>
+
+      {genres.length > 0 ? (
+        <>
+          <h2 className="section-title">Seed by genre</h2>
+          <div className="chip-row">
+            {genres.map((g) => (
+              <button
+                key={g.id}
+                type="button"
+                className="btn btn-ghost"
+                disabled={starting}
+                onClick={() => void playSeed({ seed_genre_id: g.id })}
+              >
+                {g.name} <span className="muted">({g.count})</span>
+              </button>
+            ))}
+          </div>
+        </>
+      ) : null}
+
+      {artists.length > 0 ? (
+        <>
+          <h2 className="section-title">Seed by artist</h2>
+          <div className="cover-grid cover-grid-artists">
+            {artists.map((a) => (
+              <button
+                key={a.id}
+                type="button"
+                className="tile tile-cover-card"
+                disabled={starting}
+                onClick={() => void playSeed({ seed_artist_id: a.id })}
+              >
+                {a.cover_url ? (
+                  <img className="tile-cover" src={a.cover_url} alt="" />
+                ) : (
+                  <div className="tile-cover tile-cover-fallback" aria-hidden>
+                    {(a.name[0] || "?").toUpperCase()}
+                  </div>
+                )}
+                <span className="tile-label">{a.name}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      ) : null}
     </section>
   );
 }

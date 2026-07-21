@@ -17,7 +17,7 @@ import {
 } from "react";
 import { ApiError, api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
-import type { CatalogTrack, QueueTrack, SessionStatus, Station } from "../api/types";
+import type { CatalogTrack, CreateSessionSeed, QueueTrack, SessionStatus, Station } from "../api/types";
 import { AudioEngine } from "./audioEngine";
 import {
   acquireWakeLock,
@@ -71,7 +71,9 @@ type PlayerState = {
   trackFeedback: "like" | "dislike" | null;
   currentTime: number;
   duration: number;
-  startRadio: (seedTrackId: number) => Promise<void>;
+  startRadio: (seed: number | CreateSessionSeed) => Promise<void>;
+  /** Play an album linearly (no Radio / ANN). */
+  playAlbum: (albumId: number) => Promise<void>;
   /**
    * Resume an active station worker when possible; otherwise start a new session
    * seeded from the station's last now-playing (or seed) track.
@@ -502,15 +504,41 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     reportEngineError,
   ]);
 
-  // Prefetch next progressive URL so skip can start from a warm cache.
+  // Prefetch next progressive URL so natural advance / skip can promote warm.
   useEffect(() => {
     const nextId = status?.queue?.[0]?.track_id;
     if (!nextId || status?.status === "stopped") return;
-    engineRef.current?.prefetchProgressive(`/api/v1/tracks/${nextId}/stream`);
+    engineRef.current?.prefetchProgressive(`/api/v1/tracks/${nextId}/stream`, nextId);
   }, [status?.queue, status?.status]);
 
+  // Near end: fire complete early while standby is warm → gapless-ish handoff.
+  useEffect(() => {
+    const eng = engineRef.current;
+    if (!eng) return;
+    const onTime = () => {
+      if (advancingRef.current) return;
+      const st = statusRef.current;
+      const nextId = st?.queue?.[0]?.track_id;
+      if (!st || !isLiveStatus(st.status) || !nextId) return;
+      if (!eng.prefetchReady(nextId)) return;
+      const rem = eng.remainingTime();
+      if (rem <= 0 || rem > 0.45) return;
+      advancingRef.current = true;
+      void feedbackRef
+        .current("complete")
+        .catch((e) => {
+          setError(e instanceof Error ? e.message : "couldn't advance to next track");
+        })
+        .finally(() => {
+          advancingRef.current = false;
+        });
+    };
+    eng.audio.addEventListener("timeupdate", onTime);
+    return () => eng.audio.removeEventListener("timeupdate", onTime);
+  }, []);
+
   const startRadio = useCallback(
-    async (seedTrackId: number) => {
+    async (seed: number | CreateSessionSeed) => {
       setStarting(true);
       setError(null);
       clientHistoryRef.current = [];
@@ -524,7 +552,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
             /* ignore */
           }
         }
-        const s = await api.createSession(seedTrackId);
+        const s = await api.createSession(seed);
         sessionIdRef.current = s.id;
         sessionStorage.setItem(SESSION_KEY, s.id);
         setStatus(s);
@@ -539,6 +567,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       }
     },
     [armPlaybackChrome],
+  );
+
+  const playAlbum = useCallback(
+    async (albumId: number) => {
+      await startRadio({ mode: "album", seed_album_id: albumId });
+    },
+    [startRadio],
   );
 
   const resumeStation = useCallback(
@@ -944,6 +979,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       currentTime,
       duration,
       startRadio,
+      playAlbum,
       resumeStation,
       stop,
       feedback,
@@ -974,6 +1010,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       currentTime,
       duration,
       startRadio,
+      playAlbum,
       resumeStation,
       stop,
       feedback,

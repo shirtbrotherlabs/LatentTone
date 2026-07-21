@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Author: martinsah
 // Date: 2026-07-15
+// Last-Modified: 2026-07-20
 
 package meta
 
@@ -170,7 +171,7 @@ func CapEmbedWorkers(want int) int {
 }
 
 // ForWebStart returns config for the browse UI identity scan: all pending tracks,
-// with parallel Essentia workers (at least 4, or configured concurrency if higher).
+// targeting about 4 parallel track workers (still clamped by CapEmbedWorkers).
 func (c *Config) ForWebStart() *Config {
 	out := c.Clone()
 	out.SampleMode = "all"
@@ -181,17 +182,15 @@ func (c *Config) ForWebStart() *Config {
 			break
 		}
 	}
-	if ml {
-		// ML extractors are heavier; keep web concurrency modest to avoid host OOM
-		// and leave headroom for progressive FFmpeg under load.
-		if out.Concurrency < 1 {
-			out.Concurrency = 1
-		}
-		if out.Concurrency > 2 {
-			out.Concurrency = 2
-		}
-	} else if out.Concurrency < 4 {
+	if out.Concurrency < 4 {
 		out.Concurrency = 4
+	}
+	if ml {
+		// ML extractors are heavier; allow ~4 parallel tracks but do not climb higher
+		// via yaml so progressive FFmpeg keeps headroom under load.
+		if out.Concurrency > 4 {
+			out.Concurrency = 4
+		}
 	}
 	out.Concurrency = CapEmbedWorkers(out.Concurrency)
 	return out

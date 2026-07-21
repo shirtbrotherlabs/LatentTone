@@ -34,7 +34,8 @@ lancedb_table: track_vectors
 lance_helper_path: /usr/local/lib/latenttone/lance_helper.py
 
 concurrency: 4
-batch_size: 32
+# Smaller Lance flush batches keep ready/processing counters moving on large indexes.
+batch_size: 4
 
 # Sampling — Compose CLI `embed` profile stays a small random smoke subset.
 # The browse UI "Scan acoustic identity" button overrides to sample_mode=all.

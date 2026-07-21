@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-only
  * Author: martinsah
  * Date: 2026-07-17
+ * Last-modified: 2026-07-20
  */
 
 import type { ReactNode } from "react";
@@ -27,6 +28,8 @@ type Props = {
   renderTrailing?: (track: TrackTableRow, index: number) => ReactNode;
   /** When set, thumbs become buttons that post like/dislike/clear. */
   onFeedback?: (trackId: number, signal: "like" | "dislike" | "clear") => void;
+  /** Hide queue/radio actions for a row (e.g. grayed-out album duplicates). */
+  hideActions?: (track: TrackTableRow) => boolean;
 };
 
 function trackId(t: TrackTableRow): number {
@@ -69,6 +72,7 @@ export function TrackTable({
   renderTitleBadge,
   renderTrailing,
   onFeedback,
+  hideActions,
 }: Props) {
   if (!tracks.length) {
     return <p className="muted">No tracks.</p>;
@@ -180,7 +184,7 @@ export function TrackTable({
                 )}
               </td>
               <td className="track-table-actions-col">
-                <TrackActions track={{ ...t, id }} />
+                {hideActions?.(t) ? null : <TrackActions track={{ ...t, id }} />}
               </td>
               {renderTrailing ? (
                 <td className="track-table-trailing-col">{renderTrailing(t, idx)}</td>

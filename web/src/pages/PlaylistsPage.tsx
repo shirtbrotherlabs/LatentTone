@@ -143,13 +143,22 @@ export function PlaylistDetailPage() {
           Rename
         </button>
         {tracks[0] ? (
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={() => void startRadio(tracks[0].id)}
-          >
-            Listen from first track
-          </button>
+          <>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => void startRadio({ seed_playlist_id: pl.id })}
+            >
+              Start radio from playlist
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => void startRadio(tracks[0].id)}
+            >
+              Listen from first track
+            </button>
+          </>
         ) : null}
         <button
           type="button"

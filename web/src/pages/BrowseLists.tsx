@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { CatalogAlbum, CatalogArtist, CatalogTrack } from "../api/types";
 import { TrackTable } from "../components/TrackTable";
@@ -113,6 +113,7 @@ export function ArtistDetail() {
   const [name, setName] = useState("");
   const [albums, setAlbums] = useState<CatalogAlbum[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const { startRadio } = usePlayer();
   useEffect(() => {
     const n = Number(id);
     if (!n) return;
@@ -128,6 +129,16 @@ export function ArtistDetail() {
   return (
     <div>
       <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400 }}>{name}</h2>
+      {id ? (
+        <button
+          type="button"
+          className="btn"
+          style={{ marginTop: "0.5rem" }}
+          onClick={() => void startRadio({ seed_artist_id: Number(id) })}
+        >
+          Start radio from artist
+        </button>
+      ) : null}
       <div className="cover-grid" style={{ marginTop: "1rem" }}>
         {albums.map((al) => (
           <Link key={al.id} className="tile tile-cover-card" to={`/library/albums/${al.id}`}>
@@ -173,10 +184,12 @@ export function AlbumsList() {
 
 export function AlbumDetail() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const [album, setAlbum] = useState<CatalogAlbum | null>(null);
   const [tracks, setTracks] = useState<CatalogTrack[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const { startRadio } = usePlayer();
+  const [busy, setBusy] = useState(false);
+  const { startRadio, playAlbum, starting } = usePlayer();
   useEffect(() => {
     const n = Number(id);
     if (!n) return;
@@ -190,6 +203,7 @@ export function AlbumDetail() {
   }, [id]);
   if (error) return <p className="error">{error}</p>;
   if (!album) return <p className="muted">Loading…</p>;
+  const playable = tracks.filter((t) => !t.is_duplicate);
   return (
     <div>
       <div className="detail-hero">
@@ -206,19 +220,51 @@ export function AlbumDetail() {
             {album.artist}
             {album.year ? ` · ${album.year}` : ""}
           </p>
-          {tracks[0] ? (
-            <button
-              type="button"
-              className="btn"
-              style={{ marginTop: "0.75rem" }}
-              onClick={() => void startRadio(tracks[0].id)}
-            >
-              Start radio from album
-            </button>
-          ) : null}
+          <div className="detail-actions" style={{ marginTop: "0.75rem", display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+            {playable[0] ? (
+              <button
+                type="button"
+                className="btn"
+                disabled={busy || starting}
+                onClick={() => {
+                  setBusy(true);
+                  void playAlbum(album.id)
+                    .then(() => navigate("/now-playing"))
+                    .catch((e) => setError(e instanceof Error ? e.message : "failed"))
+                    .finally(() => setBusy(false));
+                }}
+              >
+                {busy || starting ? "Starting…" : "Play album"}
+              </button>
+            ) : null}
+            {tracks[0] ? (
+              <button
+                type="button"
+                className="btn btn-ghost"
+                disabled={starting}
+                onClick={() => void startRadio(playable[0]?.id ?? tracks[0].id)}
+              >
+                Start radio from album
+              </button>
+            ) : null}
+          </div>
         </div>
       </div>
-      <TrackTable tracks={tracks} showAlbum={false} showYear={false} />
+      <TrackTable
+        tracks={tracks}
+        showAlbum={false}
+        showYear={false}
+        rowClassName={(t) => (t.is_duplicate ? "track-row-duplicate" : undefined)}
+        hideActions={(t) => !!t.is_duplicate}
+        renderTitleBadge={(t) =>
+          t.is_duplicate ? (
+            <span className="dup-badge" title="Lower-quality duplicate — skipped when playing album">
+              duplicate
+              {t.format ? ` · ${t.format}` : ""}
+            </span>
+          ) : null
+        }
+      />
     </div>
   );
 }

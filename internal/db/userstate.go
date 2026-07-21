@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 const (
@@ -262,6 +263,7 @@ type ListeningSession struct {
 	UserID        int64
 	SeedTrackID   sql.NullInt64
 	Status        string
+	Kind          string
 	NowPlayingID  sql.NullInt64
 	QueueJSON     sql.NullString
 	LastFeedback  sql.NullString
@@ -270,13 +272,21 @@ type ListeningSession struct {
 	UpdatedAt     string
 }
 
-// CreateListeningSession inserts a new listening session row.
+// CreateListeningSession inserts a new listening session row (kind=radio).
 func (d *DB) CreateListeningSession(id string, userID, seedTrackID int64) (*ListeningSession, error) {
+	return d.CreateListeningSessionKind(id, userID, seedTrackID, SessionKindRadio)
+}
+
+// CreateListeningSessionKind inserts a session with an explicit kind (radio|album).
+func (d *DB) CreateListeningSessionKind(id string, userID, seedTrackID int64, kind string) (*ListeningSession, error) {
+	if kind == "" {
+		kind = SessionKindRadio
+	}
 	now := Now()
 	_, err := d.SQL.Exec(`
-INSERT INTO listening_sessions (id, user_id, seed_track_id, status, now_playing_id, queue_json, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, '[]', ?, ?)`,
-		id, userID, seedTrackID, SessionStatusCreated, seedTrackID, now, now,
+INSERT INTO listening_sessions (id, user_id, seed_track_id, status, kind, now_playing_id, queue_json, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, '[]', ?, ?)`,
+		id, userID, seedTrackID, SessionStatusCreated, kind, seedTrackID, now, now,
 	)
 	if err != nil {
 		return nil, err
@@ -287,11 +297,11 @@ VALUES (?, ?, ?, ?, ?, '[]', ?, ?)`,
 // GetListeningSession loads a session by id.
 func (d *DB) GetListeningSession(id string) (*ListeningSession, error) {
 	row := d.SQL.QueryRow(`
-SELECT id, user_id, seed_track_id, status, now_playing_id, queue_json, last_feedback, error_message, created_at, updated_at
+SELECT id, user_id, seed_track_id, status, COALESCE(kind, 'radio'), now_playing_id, queue_json, last_feedback, error_message, created_at, updated_at
 FROM listening_sessions WHERE id = ?`, id)
 	var s ListeningSession
 	err := row.Scan(
-		&s.ID, &s.UserID, &s.SeedTrackID, &s.Status, &s.NowPlayingID,
+		&s.ID, &s.UserID, &s.SeedTrackID, &s.Status, &s.Kind, &s.NowPlayingID,
 		&s.QueueJSON, &s.LastFeedback, &s.ErrorMessage, &s.CreatedAt, &s.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
@@ -340,6 +350,133 @@ SELECT COUNT(1) FROM listening_sessions WHERE status IN (?, ?)`,
 	return n, err
 }
 
+// StopStaleListeningSessions marks created/playing rows with updated_at before cut as stopped.
+func (d *DB) StopStaleListeningSessions(cut time.Time) (int64, error) {
+	cutStr := cut.UTC().Format("2006-01-02T15:04:05")
+	res, err := d.SQL.Exec(`
+UPDATE listening_sessions
+SET status = ?, error_message = COALESCE(error_message, 'idle reclaim'), updated_at = ?
+WHERE status IN (?, ?) AND updated_at < ?`,
+		SessionStatusStopped, Now(), SessionStatusCreated, SessionStatusPlaying, cutStr,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// ActiveListeningSessionRow is a list row for Settings / admin session views.
+type ActiveListeningSessionRow struct {
+	ListeningSession
+	Username string
+}
+
+// CountActiveListeningSessionsForUser counts created/playing rows for one user.
+func (d *DB) CountActiveListeningSessionsForUser(userID int64) (int64, error) {
+	var n int64
+	err := d.SQL.QueryRow(`
+SELECT COUNT(1) FROM listening_sessions WHERE user_id = ? AND status IN (?, ?)`,
+		userID, SessionStatusCreated, SessionStatusPlaying,
+	).Scan(&n)
+	return n, err
+}
+
+// StopOldestActiveListeningSessions marks the n oldest active sessions stopped.
+// If userID > 0, only that user; otherwise all users.
+func (d *DB) StopOldestActiveListeningSessions(userID int64, n int) (int64, error) {
+	if n <= 0 {
+		return 0, nil
+	}
+	q := `
+SELECT id FROM listening_sessions
+WHERE status IN (?, ?)`
+	args := []any{SessionStatusCreated, SessionStatusPlaying}
+	if userID > 0 {
+		q += ` AND user_id = ?`
+		args = append(args, userID)
+	}
+	q += ` ORDER BY updated_at ASC, created_at ASC LIMIT ?`
+	args = append(args, n)
+	rows, err := d.SQL.Query(q, args...)
+	if err != nil {
+		return 0, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	_ = rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	var stopped int64
+	for _, id := range ids {
+		res, err := d.SQL.Exec(`
+UPDATE listening_sessions SET status = ?, error_message = COALESCE(error_message, 'capacity reclaim'), updated_at = ?
+WHERE id = ? AND status IN (?, ?)`,
+			SessionStatusStopped, Now(), id, SessionStatusCreated, SessionStatusPlaying,
+		)
+		if err != nil {
+			return stopped, err
+		}
+		aff, _ := res.RowsAffected()
+		stopped += aff
+	}
+	return stopped, nil
+}
+
+// ListActiveListeningSessions returns created/playing sessions.
+// If userID > 0, only that user; otherwise all users (admin).
+func (d *DB) ListActiveListeningSessions(userID int64, limit int) ([]ActiveListeningSessionRow, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	q := `
+SELECT s.id, s.user_id, s.seed_track_id, s.status, COALESCE(s.kind, 'radio'), s.now_playing_id,
+       s.queue_json, s.last_feedback, s.error_message, s.created_at, s.updated_at,
+       COALESCE(u.username, '')
+FROM listening_sessions s
+LEFT JOIN users u ON u.id = s.user_id
+WHERE s.status IN (?, ?)`
+	args := []any{SessionStatusCreated, SessionStatusPlaying}
+	if userID > 0 {
+		q += ` AND s.user_id = ?`
+		args = append(args, userID)
+	}
+	q += ` ORDER BY s.updated_at DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err = d.SQL.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ActiveListeningSessionRow
+	for rows.Next() {
+		var s ActiveListeningSessionRow
+		if err := rows.Scan(
+			&s.ID, &s.UserID, &s.SeedTrackID, &s.Status, &s.Kind, &s.NowPlayingID,
+			&s.QueueJSON, &s.LastFeedback, &s.ErrorMessage, &s.CreatedAt, &s.UpdatedAt,
+			&s.Username,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
 // ListRecentListeningSessions returns the user's most recently updated stations.
 // Active (created/playing) rows are ordered ahead of stopped/error for the same
 // updated_at bucket; overall sort is updated_at DESC then created_at DESC.
@@ -351,15 +488,15 @@ func (d *DB) ListRecentListeningSessions(userID int64, limit int) ([]ListeningSe
 		limit = 50
 	}
 	rows, err := d.SQL.Query(`
-SELECT id, user_id, seed_track_id, status, now_playing_id, queue_json, last_feedback, error_message, created_at, updated_at
+SELECT id, user_id, seed_track_id, status, COALESCE(kind, 'radio'), now_playing_id, queue_json, last_feedback, error_message, created_at, updated_at
 FROM listening_sessions
-WHERE user_id = ?
+WHERE user_id = ? AND COALESCE(kind, 'radio') = ?
 ORDER BY
   CASE WHEN status IN (?, ?) THEN 0 ELSE 1 END,
   updated_at DESC,
   created_at DESC
 LIMIT ?`,
-		userID, SessionStatusCreated, SessionStatusPlaying, limit,
+		userID, SessionKindRadio, SessionStatusCreated, SessionStatusPlaying, limit,
 	)
 	if err != nil {
 		return nil, err
@@ -369,7 +506,7 @@ LIMIT ?`,
 	for rows.Next() {
 		var s ListeningSession
 		if err := rows.Scan(
-			&s.ID, &s.UserID, &s.SeedTrackID, &s.Status, &s.NowPlayingID,
+			&s.ID, &s.UserID, &s.SeedTrackID, &s.Status, &s.Kind, &s.NowPlayingID,
 			&s.QueueJSON, &s.LastFeedback, &s.ErrorMessage, &s.CreatedAt, &s.UpdatedAt,
 		); err != nil {
 			return nil, err
