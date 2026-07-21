@@ -134,7 +134,11 @@ func userPublic(u *db.User) map[string]any {
 }
 
 type createSessionBody struct {
-	SeedTrackID int64 `json:"seed_track_id"`
+	SeedTrackID    int64  `json:"seed_track_id"`
+	SeedArtistID   int64  `json:"seed_artist_id"`
+	SeedGenreID    int64  `json:"seed_genre_id"`
+	SeedGenre      string `json:"seed_genre"`
+	SeedPlaylistID int64  `json:"seed_playlist_id"`
 }
 
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
@@ -211,11 +215,22 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSONBody(w, r, &body) {
 		return
 	}
-	if body.SeedTrackID <= 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "seed_track_id required"})
+	seedID := body.SeedTrackID
+	if seedID <= 0 {
+		var err error
+		seedID, err = s.DB.PickSeedTrackID(body.SeedArtistID, body.SeedGenreID, body.SeedPlaylistID, body.SeedGenre)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	if seedID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "seed_track_id or seed_artist_id / seed_genre_id / seed_playlist_id required",
+		})
 		return
 	}
-	live, err := s.Sessions.Create(r.Context(), u.ID, body.SeedTrackID)
+	live, err := s.Sessions.Create(r.Context(), u.ID, seedID)
 	if err != nil {
 		msg := err.Error()
 		code := http.StatusBadRequest
@@ -481,6 +496,10 @@ func (s *Server) handleTrackStream(w http.ResponseWriter, r *http.Request) {
 		abs, err := stream.ResolveMediaPath(s.Cfg.LibraryRoot, t.Path)
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid media path"})
+			return
+		}
+		if _, err := os.Stat(abs); err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "media file missing on disk"})
 			return
 		}
 		u := auth.UserFrom(r.Context())

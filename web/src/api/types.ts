@@ -83,6 +83,39 @@ export type CatalogArtist = {
   cover_url?: string;
 };
 
+export type CatalogGenre = {
+  id: number;
+  name: string;
+  count: number;
+};
+
+export type SearchSuggestion = {
+  kind: "track" | "artist" | "album" | string;
+  id: number;
+  label: string;
+  sublabel?: string;
+  cover_url?: string;
+  track_id?: number;
+  duration_ms?: number;
+};
+
+export type DuplicateGroup = {
+  title: string;
+  album: string;
+  artist: string;
+  duration_ms: number;
+  count: number;
+  tracks: (CatalogTrack & { path?: string })[];
+};
+
+export type CreateSessionSeed = {
+  seed_track_id?: number;
+  seed_artist_id?: number;
+  seed_genre_id?: number;
+  seed_genre?: string;
+  seed_playlist_id?: number;
+};
+
 export type PlaylistHeader = {
   id: number;
   name: string;

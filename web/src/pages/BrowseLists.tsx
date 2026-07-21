@@ -113,6 +113,7 @@ export function ArtistDetail() {
   const [name, setName] = useState("");
   const [albums, setAlbums] = useState<CatalogAlbum[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const { startRadio } = usePlayer();
   useEffect(() => {
     const n = Number(id);
     if (!n) return;
@@ -128,6 +129,16 @@ export function ArtistDetail() {
   return (
     <div>
       <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400 }}>{name}</h2>
+      {id ? (
+        <button
+          type="button"
+          className="btn"
+          style={{ marginTop: "0.5rem" }}
+          onClick={() => void startRadio({ seed_artist_id: Number(id) })}
+        >
+          Start radio from artist
+        </button>
+      ) : null}
       <div className="cover-grid" style={{ marginTop: "1rem" }}>
         {albums.map((al) => (
           <Link key={al.id} className="tile tile-cover-card" to={`/library/albums/${al.id}`}>

@@ -53,6 +53,11 @@ export class AudioEngine {
   /** Last successfully requested catalog track id (0 = unknown). */
   private attachedTrackId = 0;
 
+  /** Standby element for gapless handoff (progressive only). */
+  private standby: HTMLAudioElement | null = null;
+  private standbyUrl = "";
+  private standbyTrackId = 0;
+
   constructor() {
     this.audio = new Audio();
     this.audio.preload = "auto";
@@ -194,13 +199,70 @@ export class AudioEngine {
   }
 
   /**
-   * Progressive prefetch is intentionally a no-op when the stream may be
-   * FFmpeg-transcoded (Opus/MP3/AAC prefs). A Range warm-up used to spawn a
-   * full encode that raced the real <audio> GET and froze the server on skip.
-   * Original-file streams are warmed by the browser media element itself.
+   * Warm the next progressive URL on a standby <audio> for gapless promote.
+   * Uses a full element preload (same credentials) rather than a racing Range GET.
    */
-  prefetchProgressive(_url?: string) {
-    /* no-op — see comment above */
+  prefetchProgressive(url?: string, trackId = 0) {
+    const path = toSameOriginPath(url);
+    if (!path) return;
+    if (path === this.standbyUrl && this.standby && this.standbyTrackId === trackId) return;
+    if (!this.standby) {
+      this.standby = new Audio();
+      this.standby.preload = "auto";
+      this.standby.volume = 1;
+    }
+    this.standbyUrl = path;
+    this.standbyTrackId = trackId;
+    try {
+      this.standby.src = path;
+      this.standby.load();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /** True when standby is loaded enough to start immediately for trackId. */
+  prefetchReady(trackId: number): boolean {
+    if (!this.standby || this.standbyTrackId !== trackId || !this.standbyUrl) return false;
+    return this.standby.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+  }
+
+  /**
+   * Start the prefetched track on the primary element (cache-warmed URL) without
+   * waiting on a cold network round-trip. Returns false if standby is not ready.
+   */
+  async promotePrefetch(trackId: number, onError?: (msg: string) => void): Promise<boolean> {
+    if (!this.prefetchReady(trackId) || !this.standby) return false;
+    const url = this.standbyUrl;
+    this.invalidatePlay();
+    this.destroyHls();
+    this.audio.src = url;
+    this.audio.currentTime = 0;
+    try {
+      this.audio.load();
+    } catch {
+      /* ignore */
+    }
+    await this.waitCanPlay(800);
+    this.lastKey = `${trackId}|${url}`;
+    this.attachedTrackId = trackId;
+    this.standbyUrl = "";
+    this.standbyTrackId = 0;
+    try {
+      this.standby.removeAttribute("src");
+      this.standby.load();
+    } catch {
+      /* ignore */
+    }
+    await this.safePlay(onError, false);
+    return true;
+  }
+
+  /** Seconds remaining on the current track (0 if unknown). */
+  remainingTime(): number {
+    const d = this.audio.duration;
+    if (!Number.isFinite(d) || d <= 0) return 0;
+    return Math.max(0, d - this.audio.currentTime);
   }
 
   /** Cancel in-flight play() and bump epoch so late rejects are ignored. */
@@ -377,6 +439,11 @@ export class AudioEngine {
         await this.safePlay(opts.onError, false);
       }
       return;
+    }
+    if (preferProgressive && trackId > 0 && this.prefetchReady(trackId)) {
+      if (await this.promotePrefetch(trackId, opts.onError)) {
+        return;
+      }
     }
     const primary =
       preferProgressive && progressiveUrl

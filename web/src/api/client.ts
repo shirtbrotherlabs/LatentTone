@@ -8,8 +8,11 @@
 import type {
   CatalogAlbum,
   CatalogArtist,
+  CatalogGenre,
   CatalogSummary,
   CatalogTrack,
+  CreateSessionSeed,
+  DuplicateGroup,
   EmbedStatus,
   Playlist,
   PlaylistHeader,
@@ -18,6 +21,7 @@ import type {
   RadioPrefsPatch,
   ScanSchedule,
   ScanStatus,
+  SearchSuggestion,
   SessionStatus,
   Station,
   StreamPrefs,
@@ -117,10 +121,20 @@ export const api = {
   listStations(limit = 12) {
     return request<{ stations: Station[] }>(`/api/v1/me/stations?limit=${limit}`);
   },
-  createSession(seedTrackId: number) {
+  createSession(seed: number | CreateSessionSeed) {
+    const body =
+      typeof seed === "number"
+        ? { seed_track_id: seed }
+        : {
+            seed_track_id: seed.seed_track_id,
+            seed_artist_id: seed.seed_artist_id,
+            seed_genre_id: seed.seed_genre_id,
+            seed_genre: seed.seed_genre,
+            seed_playlist_id: seed.seed_playlist_id,
+          };
     return request<SessionStatus>("/api/v1/sessions", {
       method: "POST",
-      body: JSON.stringify({ seed_track_id: seedTrackId }),
+      body: JSON.stringify(body),
     });
   },
   getSession(id: string) {
@@ -208,6 +222,21 @@ export const api = {
     const qs = params.toString();
     return request<{ tracks: CatalogTrack[] }>(
       `/api/v1/catalog/tracks${qs ? `?${qs}` : ""}`,
+    );
+  },
+  searchSuggest(q: string, limit = 12, signal?: AbortSignal) {
+    const params = new URLSearchParams({ q, limit: String(limit) });
+    return request<{ suggestions: SearchSuggestion[]; q: string }>(
+      `/api/v1/catalog/search/suggest?${params}`,
+      signal ? { signal } : {},
+    );
+  },
+  listGenres(limit = 200) {
+    return request<{ genres: CatalogGenre[] }>(`/api/v1/catalog/genres?limit=${limit}`);
+  },
+  listDuplicates(limit = 200) {
+    return request<{ groups: DuplicateGroup[]; rule: string }>(
+      `/api/v1/catalog/duplicates?limit=${limit}`,
     );
   },
   /** Random Now Playing seeds; prefers tracks with playback history. */

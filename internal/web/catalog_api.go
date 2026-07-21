@@ -42,6 +42,12 @@ func (s *Server) handleCatalogAPI(w http.ResponseWriter, r *http.Request) {
 		s.handleCatalogTracks(w, r, parts[1:])
 	case "years":
 		s.handleCatalogYears(w, r, parts[1:])
+	case "genres":
+		s.handleCatalogGenres(w, r, parts[1:])
+	case "search":
+		s.handleCatalogSearch(w, r, parts[1:])
+	case "duplicates":
+		s.handleCatalogDuplicates(w, r, parts[1:])
 	default:
 		http.NotFound(w, r)
 	}
@@ -274,4 +280,100 @@ func trackJSONList(tracks []db.Track) []map[string]any {
 		out = append(out, trackJSON(&tracks[i]))
 	}
 	return out
+}
+
+func (s *Server) handleCatalogGenres(w http.ResponseWriter, r *http.Request, rest []string) {
+	if len(rest) != 0 {
+		http.NotFound(w, r)
+		return
+	}
+	limit := queryInt(r, "limit", 200)
+	genres, err := s.DB.ListGenres(limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	out := make([]map[string]any, 0, len(genres))
+	for _, g := range genres {
+		out = append(out, map[string]any{"id": g.ID, "name": g.Name, "count": g.Count})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"genres": out})
+}
+
+func (s *Server) handleCatalogSearch(w http.ResponseWriter, r *http.Request, rest []string) {
+	if len(rest) == 1 && rest[0] == "suggest" {
+		q := r.URL.Query().Get("q")
+		limit := queryInt(r, "limit", 12)
+		hits, err := s.DB.SearchSuggest(q, limit)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		out := make([]map[string]any, 0, len(hits))
+		for _, h := range hits {
+			row := map[string]any{
+				"kind":     h.Kind,
+				"id":       h.ID,
+				"label":    h.Label,
+				"sublabel": h.SubLabel,
+			}
+			if h.TrackID > 0 {
+				row["track_id"] = h.TrackID
+			}
+			if h.DurationMS > 0 {
+				row["duration_ms"] = h.DurationMS
+			}
+			if h.CoverPath != "" {
+				row["cover_url"] = "/covers/" + h.CoverPath
+			}
+			out = append(out, row)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"suggestions": out, "q": q})
+		return
+	}
+	http.NotFound(w, r)
+}
+
+func (s *Server) handleCatalogDuplicates(w http.ResponseWriter, r *http.Request, rest []string) {
+	if len(rest) != 0 {
+		http.NotFound(w, r)
+		return
+	}
+	// Authenticated library owners; RequireUser via wrapper in mux if needed — catalog is public today.
+	limit := queryInt(r, "limit", 200)
+	groups, err := s.DB.ListDuplicateGroups(limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	out := make([]map[string]any, 0, len(groups))
+	for _, g := range groups {
+		tracks := make([]map[string]any, 0, len(g.Tracks))
+		for _, tr := range g.Tracks {
+			row := map[string]any{
+				"id":          tr.TrackID,
+				"title":       tr.Title,
+				"album":       tr.Album,
+				"artist":      tr.Artist,
+				"path":        tr.Path,
+				"duration_ms": tr.DurationMS,
+			}
+			if tr.CoverPath != "" {
+				row["cover_url"] = "/covers/" + tr.CoverPath
+			}
+			tracks = append(tracks, row)
+		}
+		out = append(out, map[string]any{
+			"title":       g.Title,
+			"album":       g.Album,
+			"artist":      g.Artist,
+			"duration_ms": g.DurationMS,
+			"count":       len(g.Tracks),
+			"tracks":      tracks,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"groups": out,
+		"rule":   "normalized title+album+artist; |duration| ≤ 1s",
+	})
 }

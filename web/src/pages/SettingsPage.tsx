@@ -7,8 +7,16 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api/client";
-import type { EmbedStatus, RadioPrefs, ScanSchedule, ScanStatus, StreamPrefs } from "../api/types";
+import type {
+  DuplicateGroup,
+  EmbedStatus,
+  RadioPrefs,
+  ScanSchedule,
+  ScanStatus,
+  StreamPrefs,
+} from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { usePlayer } from "../player/PlayerContext";
 
@@ -96,6 +104,9 @@ export function SettingsPage() {
   const [embed, setEmbed] = useState<EmbedStatus | null>(null);
   const [radio, setRadio] = useState<RadioPrefs | null>(null);
   const [stream, setStream] = useState<StreamPrefs | null>(null);
+  const [dupes, setDupes] = useState<DuplicateGroup[] | null>(null);
+  const [dupesRule, setDupesRule] = useState("");
+  const [dupesBusy, setDupesBusy] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [passwordMsg, setPasswordMsg] = useState<string | null>(null);
@@ -641,6 +652,57 @@ export function SettingsPage() {
       </div>
 
       {error ? <p className="error">{error}</p> : null}
+
+      <div className="tile" style={{ marginTop: "1rem" }}>
+        <h2 className="tile-title">Possible duplicates</h2>
+        <p className="muted" style={{ marginTop: 0 }}>
+          Groups where title, album, and artist match after ignoring capitalization/punctuation,
+          and durations are within 1 second. Acoustic embeddings are not used.
+        </p>
+        <button
+          type="button"
+          className="btn"
+          disabled={dupesBusy}
+          onClick={() => {
+            setDupesBusy(true);
+            setError(null);
+            void api
+              .listDuplicates(100)
+              .then((r) => {
+                setDupes(r.groups);
+                setDupesRule(r.rule);
+              })
+              .catch((e) => setError(e instanceof Error ? e.message : "failed"))
+              .finally(() => setDupesBusy(false));
+          }}
+        >
+          {dupesBusy ? "Scanning…" : dupes ? "Refresh" : "Find duplicates"}
+        </button>
+        {dupesRule ? (
+          <p className="muted" style={{ fontSize: "0.85rem" }}>
+            Rule: {dupesRule}
+          </p>
+        ) : null}
+        {dupes && dupes.length === 0 ? <p className="muted">No duplicate groups found.</p> : null}
+        {dupes?.map((g) => (
+          <div key={`${g.artist}|${g.album}|${g.title}|${g.duration_ms}`} className="dup-group">
+            <strong>
+              {g.artist} — {g.title}
+            </strong>
+            <div className="muted">
+              {g.album} · {g.count} files · ~{Math.round(g.duration_ms / 1000)}s
+            </div>
+            <ul>
+              {g.tracks.map((t) => (
+                <li key={t.id}>
+                  <Link to={`/library/tracks/${t.id}`}>#{t.id}</Link>{" "}
+                  {(t as { path?: string }).path || t.title}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
     </section>
   );
 }

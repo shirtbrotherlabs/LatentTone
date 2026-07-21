@@ -140,6 +140,17 @@ Or set `enable_api_docs: true` in `configs/scanner.yaml` and restart `browse`.
 
 Cookie `lt_session` works for same-origin clients; Swagger defaults to Bearer. Spec: `GET /api/openapi.yaml` when docs are enabled.
 
+## Catalog search, duplicates, and Radio seeds
+
+| Endpoint | Notes |
+|----------|--------|
+| `GET /api/v1/catalog/search/suggest?q=&limit=` | Typeahead: tracks, artists, albums (+ `cover_url`) |
+| `GET /api/v1/catalog/duplicates?limit=` | Tag+duration duplicate groups (≤1s; case/punct-insensitive) |
+| `GET /api/v1/catalog/genres?limit=` | Genres with track counts |
+| `POST /api/v1/sessions` | Seed with `seed_track_id` **or** `seed_artist_id` / `seed_genre_id` / `seed_playlist_id` |
+
+SPA: omnibox in the main chrome; Settings → Possible duplicates; Radio genre/artist seeds; playlist “Start radio from playlist”.
+
 ## Debug stream probe
 
 Flag-gated `/dev/stream` (not the product client). Off by default. Prefer `/app/` for listening.

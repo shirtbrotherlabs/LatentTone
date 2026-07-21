@@ -8,6 +8,7 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { FloatingPlayer } from "../player/FloatingPlayer";
+import { SearchOmnibox } from "./SearchOmnibox";
 
 export function Shell() {
   const { user, logout } = useAuth();
@@ -59,6 +60,9 @@ export function Shell() {
         </div>
       </aside>
       <main className="main">
+        <div className="main-toolbar">
+          <SearchOmnibox />
+        </div>
         <Outlet />
       </main>
       {/* Persistent player lives outside the route outlet */}

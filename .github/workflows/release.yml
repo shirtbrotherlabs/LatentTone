@@ -45,7 +45,7 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
@@ -67,7 +67,7 @@ jobs:
             # floating alias for betas:
             docker pull ghcr.io/shirtbrotherlabs/latenttone:beta
             ```
-            Platform: `linux/amd64` only for this cut. Package may be private until you set GHCR visibility to Public.
+            Platform: multi-arch `linux/amd64` + `linux/arm64`. Package may be private until you set GHCR visibility to Public.
 
             ### Highlights
             - Product SPA at `/app/` (auth, listen, floating player, catalog, playlists)
@@ -77,6 +77,6 @@ jobs:
             - Embed helpers run at nice 15 with capped workers so playback can preempt identity scans
 
             ### Known gaps
-            - amd64-only image (no multi-arch yet)
+            - Essentia / ML layers on arm64 depend on upstream image availability — verify on target hardware
             - Identity embed can still saturate the host when the API is idle (nice/cap help; no auto-pause while listening)
             - `latest` is not published for beta/rc tags

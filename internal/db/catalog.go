@@ -223,7 +223,10 @@ INSERT INTO tracks (
 		if e != nil {
 			return 0, e
 		}
-		return res.LastInsertId()
+		trackID, e = res.LastInsertId()
+		if e != nil {
+			return 0, e
+		}
 	case err != nil:
 		return 0, err
 	default:
